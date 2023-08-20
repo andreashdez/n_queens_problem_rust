@@ -128,9 +128,9 @@ mod tests {
 
     #[test]
     fn test_conflicts_counter() {
-        let mut chromosome = Chromosome::new(8);
+        let mut chromosome = Chromosome::new(2);
         chromosome.count_conflicts();
-        let conflicts_sum = chromosome.get_conflicts();
-        println!("Conflicts: {conflicts_sum}")
+        let conflicts_sum = chromosome.get_conflicts_sum();
+        assert_eq!(conflicts_sum, 1);
     }
 }
