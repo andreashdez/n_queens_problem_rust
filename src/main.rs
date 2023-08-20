@@ -1,6 +1,7 @@
-use crate::ga::chromosome::{Chromosome, draw_board};
+use crate::ga::chromosome::Chromosome;
 
 pub mod ga;
+pub mod ui;
 
 fn main() {
     simple_logger::init().unwrap();
@@ -8,5 +9,5 @@ fn main() {
     chromosome.count_conflicts();
     let conflicts_sum = chromosome.get_conflicts_sum();
     println!("Conflicts: {conflicts_sum}");
-    draw_board(chromosome.get_positions(), chromosome.get_conflicts());
+    ui::draw_board(chromosome.get_positions(), chromosome.get_conflicts());
 }
