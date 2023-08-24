@@ -1,17 +1,21 @@
-use std::collections::HashSet;
-
 use rand::random;
+use std::collections::HashSet;
 
 pub struct Chromosome {
     positions: Vec<usize>,
     conflicts: Vec<usize>,
+    conflicts_sum: usize,
 }
 
 impl Chromosome {
     pub fn new(size: usize) -> Self {
+        let positions = generate_distinct_random_values(size);
+        let conflicts = count_conflicts(&positions);
+        let conflicts_sum = conflicts.iter().sum::<usize>() / 2;
         Self {
-            positions: generate_distinct_random_values(size),
-            conflicts: vec![0; size],
+            positions,
+            conflicts,
+            conflicts_sum,
         }
     }
 
@@ -24,27 +28,7 @@ impl Chromosome {
     }
 
     pub fn get_conflicts_sum(&self) -> usize {
-        self.conflicts.iter().sum::<usize>() / 2
-    }
-
-    pub fn count_conflicts(&mut self) {
-        let size = self.positions.len();
-        for x_two in 0..size - 1 {
-            for x_one in x_two + 1..size {
-                let distance = x_one - x_two;
-                let y_one = *self.positions.get(x_one).unwrap();
-                let y_two = *self.positions.get(x_two).unwrap();
-                log::debug!("counting conflicts: ({x_one},{y_one}) -> ({x_two},{y_two})");
-                if y_one == (y_two + distance) {
-                    *self.conflicts.get_mut(x_one).unwrap() += 1;
-                    *self.conflicts.get_mut(x_two).unwrap() += 1;
-                }
-                if y_two >= distance && y_one == (y_two - distance) {
-                    *self.conflicts.get_mut(x_one).unwrap() += 1;
-                    *self.conflicts.get_mut(x_two).unwrap() += 1;
-                }
-            }
-        }
+        self.conflicts_sum
     }
 }
 
@@ -56,9 +40,31 @@ fn generate_distinct_random_values(size: usize) -> Vec<usize> {
     out_map.into_iter().collect::<Vec<_>>()
 }
 
+fn count_conflicts(positions: &Vec<usize>) -> Vec<usize> {
+    let size = positions.len();
+    let mut conflicts = vec![0; size];
+    for x_two in 0..size - 1 {
+        for x_one in x_two + 1..size {
+            let distance = x_one - x_two;
+            let y_one = positions[x_one];
+            let y_two = positions[x_two];
+            log::debug!("counting conflicts: ({x_one},{y_one}) -> ({x_two},{y_two})");
+            if y_one == (y_two + distance) {
+                conflicts[x_one] += 1;
+                conflicts[x_two] += 1;
+            }
+            if y_two >= distance && y_one == (y_two - distance) {
+                conflicts[x_one] += 1;
+                conflicts[x_two] += 1;
+            }
+        }
+    }
+    conflicts
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::ga::chromosome::{Chromosome, generate_distinct_random_values};
+    use crate::ga::chromosome::{generate_distinct_random_values, Chromosome};
 
     #[test]
     fn test_initial_values_generator() {
@@ -75,8 +81,7 @@ mod tests {
 
     #[test]
     fn test_conflicts_counter() {
-        let mut chromosome = Chromosome::new(2);
-        chromosome.count_conflicts();
+        let chromosome = Chromosome::new(2);
         let conflicts_sum = chromosome.get_conflicts_sum();
         assert_eq!(conflicts_sum, 1);
     }
