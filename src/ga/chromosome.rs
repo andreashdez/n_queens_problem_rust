@@ -5,17 +5,18 @@ pub struct Chromosome {
     positions: Vec<usize>,
     conflicts: Vec<usize>,
     conflicts_sum: usize,
+    fitness: f32,
 }
 
 impl Chromosome {
-    pub fn new(size: usize) -> Self {
-        let positions = generate_distinct_random_values(size);
+    pub fn new(positions: Vec<usize>) -> Self {
         let conflicts = count_conflicts(&positions);
         let conflicts_sum = conflicts.iter().sum::<usize>() / 2;
         Self {
             positions,
             conflicts,
             conflicts_sum,
+            fitness: 0.0,
         }
     }
 
@@ -30,9 +31,17 @@ impl Chromosome {
     pub fn get_conflicts_sum(&self) -> usize {
         self.conflicts_sum
     }
+
+    pub fn get_fitness(&self) -> f32 {
+        self.fitness
+    }
+
+    pub fn set_fitness(&mut self, fitness: f32) {
+        self.fitness = fitness;
+    }
 }
 
-fn generate_distinct_random_values(size: usize) -> Vec<usize> {
+pub fn generate_distinct_random_values(size: usize) -> Vec<usize> {
     let mut out_map = HashSet::new();
     while out_map.len() < size {
         out_map.insert(random::<usize>() % size);
@@ -81,8 +90,13 @@ mod tests {
 
     #[test]
     fn test_conflicts_counter() {
-        let chromosome = Chromosome::new(2);
+        let positions = vec![0, 2, 4, 6, 1, 3, 5, 7];
+        let chromosome = Chromosome::new(positions);
         let conflicts_sum = chromosome.get_conflicts_sum();
         assert_eq!(conflicts_sum, 1);
+        let positions = vec![2, 4, 1, 7, 5, 0, 6, 3];
+        let chromosome = Chromosome::new(positions);
+        let conflicts_sum = chromosome.get_conflicts_sum();
+        assert_eq!(conflicts_sum, 2);
     }
 }
