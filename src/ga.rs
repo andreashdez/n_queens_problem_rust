@@ -1,3 +1,5 @@
+use rand::Rng;
+
 use self::chromosome::Chromosome;
 
 pub mod chromosome;
@@ -15,36 +17,94 @@ impl GeneticAlgorithm {
         &self.population
     }
 
-    fn sort_population(&mut self) {
+    fn get_best_chromosome(&self) -> &Chromosome {
         self.population
-            .sort_by(|a, b| b.get_conflicts_sum().cmp(&a.get_conflicts_sum()));
+            .iter()
+            .min_by_key(|chromosome| chromosome.get_conflicts_sum())
+            .unwrap()
     }
 
+    fn get_worst_chromosome(&self) -> &Chromosome {
+        self.population
+            .iter()
+            .max_by_key(|chromosome| chromosome.get_conflicts_sum())
+            .unwrap()
+    }
+
+    // fn sort_population(&mut self) {
+    //     self.population
+    //         .sort_by(|a, b| b.get_conflicts_sum().cmp(&a.get_conflicts_sum()));
+    // }
+
     pub fn calc_fitness(&mut self) {
-        self.sort_population();
-        let worst_score = self.population.first().unwrap().get_conflicts_sum() as f32;
-        let mut best_score = self.population.last().unwrap().get_conflicts_sum() as f32;
+        // self.sort_population();
+        // let worst_score = self.population.first().unwrap().get_conflicts_sum() as f32;
+        // let mut best_score = self.population.last().unwrap().get_conflicts_sum() as f32;
+        let worst_score = self.get_worst_chromosome().get_conflicts_sum() as f32;
+        let mut best_score = self.get_best_chromosome().get_conflicts_sum() as f32;
         if best_score == 0.0 {
             best_score = 0.1;
-            log::error!("Stuck in homogeneous population")
+            log::debug!("Population contains solution")
         }
+        log::debug!(
+            "calculating fitness [worst_score={}, best_score={}]",
+            worst_score,
+            best_score
+        );
         for chromosome in &mut self.population {
             let conflicts_sum = chromosome.get_conflicts_sum() as f32;
             let fitness = (worst_score - conflicts_sum) * 100.0 / best_score;
-            (*chromosome).set_fitness(fitness);
+            chromosome.set_fitness(fitness);
             log::debug!(
-                "calculating fitness [worst_score={}, best_score={}, current_conflicts={}] -> {}",
-                worst_score,
-                best_score,
-                (*chromosome).get_conflicts_sum(),
+                "calculating fitness for chromosome [conflicts={}, fitness={}]",
+                conflicts_sum,
                 fitness
             );
         }
     }
 
+    pub fn calc_rank(&mut self) {
+        let fitness_sum = self
+            .population
+            .iter()
+            .map(|chromosome| chromosome.get_fitness())
+            .sum::<f32>();
+        let rank_total = fitness_sum / self.population.len() as f32;
+        log::debug!("calculating rank [rank_total={}]", rank_total);
+        for chromosome in &mut self.population {
+            let fitness = chromosome.get_fitness();
+            let rank = fitness / rank_total;
+            chromosome.set_rank(rank);
+            log::debug!(
+                "calculating rank for chromosome [fitness={}, rank={}]",
+                fitness,
+                rank
+            );
+        }
+    }
+
+    pub fn select_random_chromosomes(&self, max_to_select: usize) -> Vec<usize> {
+        let mut selected_chromosomes = Vec::new();
+        for _ in 0..max_to_select {
+            let roulette_spin = rand::thread_rng().gen_range(1..self.population.len()) as f32;
+            let mut selection_rank = 0.0;
+            for (index, chromosome) in self.population.iter().enumerate() {
+                selection_rank += chromosome.get_rank();
+                if selection_rank > roulette_spin && !selected_chromosomes.contains(&index) {
+                    selected_chromosomes.push(index);
+                    log::debug!("selecting chromosome: {}", index);
+                    break;
+                }
+            }
+        }
+        selected_chromosomes
+    }
+
     pub fn run_epoch(&mut self) -> &Chromosome {
         self.calc_fitness();
-        self.population.last().unwrap()
+        self.calc_rank();
+        self.select_random_chromosomes(10);
+        self.get_best_chromosome()
     }
 }
 
@@ -80,13 +140,8 @@ mod tests {
         ];
         let mut genetic_algorithm = GeneticAlgorithm::new(population);
         genetic_algorithm.calc_fitness();
-        let population = genetic_algorithm.get_population();
 
-        assert_eq!(population[0].get_fitness(), 0.0);
-        assert_eq!(population[1].get_fitness(), 100.0);
-        assert_eq!(population[2].get_fitness(), 200.0);
-        assert_eq!(population[3].get_fitness(), 300.0);
-        assert_eq!(population[4].get_fitness(), 400.0);
-        assert_eq!(population[5].get_fitness(), 500.0);
+        assert_eq!(genetic_algorithm.get_worst_chromosome().get_fitness(), 0.0);
+        assert_eq!(genetic_algorithm.get_best_chromosome().get_fitness(), 500.0);
     }
 }

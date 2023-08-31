@@ -6,17 +6,20 @@ pub struct Chromosome {
     conflicts: Vec<usize>,
     conflicts_sum: usize,
     fitness: f32,
+    rank: f32,
 }
 
 impl Chromosome {
     pub fn new(positions: Vec<usize>) -> Self {
         let conflicts = count_conflicts(&positions);
         let conflicts_sum = conflicts.iter().sum::<usize>() / 2;
+        log::debug!("chromosome conflicts sum: {conflicts_sum}");
         Self {
             positions,
             conflicts,
             conflicts_sum,
             fitness: 0.0,
+            rank: 0.0,
         }
     }
 
@@ -36,8 +39,16 @@ impl Chromosome {
         self.fitness
     }
 
+    pub fn get_rank(&self) -> f32 {
+        self.rank
+    }
+
     pub fn set_fitness(&mut self, fitness: f32) {
         self.fitness = fitness;
+    }
+
+    pub fn set_rank(&mut self, rank: f32) {
+        self.rank = rank;
     }
 }
 
@@ -57,12 +68,8 @@ fn count_conflicts(positions: &Vec<usize>) -> Vec<usize> {
             let distance = x_one - x_two;
             let y_one = positions[x_one];
             let y_two = positions[x_two];
-            log::debug!("counting conflicts: ({x_one},{y_one}) -> ({x_two},{y_two})");
-            if y_one == (y_two + distance) {
-                conflicts[x_one] += 1;
-                conflicts[x_two] += 1;
-            }
-            if y_two >= distance && y_one == (y_two - distance) {
+            if y_one.abs_diff(y_two) == distance {
+                log::debug!("found conflict: ({x_one},{y_one}) -> ({x_two},{y_two})");
                 conflicts[x_one] += 1;
                 conflicts[x_two] += 1;
             }
