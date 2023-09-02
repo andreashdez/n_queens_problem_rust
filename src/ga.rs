@@ -55,7 +55,7 @@ impl GeneticAlgorithm {
             let conflicts_sum = chromosome.get_conflicts_sum() as f32;
             let fitness = (worst_score - conflicts_sum) * 100.0 / best_score;
             chromosome.set_fitness(fitness);
-            log::debug!(
+            log::trace!(
                 "calculating fitness for chromosome [conflicts={}, fitness={}]",
                 conflicts_sum,
                 fitness
@@ -75,7 +75,7 @@ impl GeneticAlgorithm {
             let fitness = chromosome.get_fitness();
             let rank = fitness / rank_total;
             chromosome.set_rank(rank);
-            log::debug!(
+            log::trace!(
                 "calculating rank for chromosome [fitness={}, rank={}]",
                 fitness,
                 rank
@@ -92,7 +92,7 @@ impl GeneticAlgorithm {
                 selection_rank += chromosome.get_rank();
                 if selection_rank > roulette_spin && !selected_chromosomes.contains(&index) {
                     selected_chromosomes.push(index);
-                    log::debug!("selecting chromosome: {}", index);
+                    log::trace!("selecting chromosome: {}", index);
                     break;
                 }
             }

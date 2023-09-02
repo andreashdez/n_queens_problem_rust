@@ -69,7 +69,7 @@ fn count_conflicts(positions: &Vec<usize>) -> Vec<usize> {
             let y_one = positions[x_one];
             let y_two = positions[x_two];
             if y_one.abs_diff(y_two) == distance {
-                log::debug!("found conflict: ({x_one},{y_one}) -> ({x_two},{y_two})");
+                log::trace!("found conflict: ({x_one},{y_one}) -> ({x_two},{y_two})");
                 conflicts[x_one] += 1;
                 conflicts[x_two] += 1;
             }
