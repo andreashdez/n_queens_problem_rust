@@ -4,6 +4,9 @@ use self::chromosome::Chromosome;
 
 pub mod chromosome;
 
+const SELECTION_MIN: usize = 10;
+const SELECTION_MAX: usize = 50;
+
 pub struct GeneticAlgorithm {
     population: Vec<Chromosome>,
 }
@@ -40,20 +43,18 @@ impl GeneticAlgorithm {
         // self.sort_population();
         // let worst_score = self.population.first().unwrap().get_conflicts_sum() as f32;
         // let mut best_score = self.population.last().unwrap().get_conflicts_sum() as f32;
-        let worst_score = self.get_worst_chromosome().get_conflicts_sum() as f32;
-        let mut best_score = self.get_best_chromosome().get_conflicts_sum() as f32;
-        if best_score == 0.0 {
-            best_score = 0.1;
-            log::debug!("Population contains solution")
-        }
+        let most_conflicts = self.get_worst_chromosome().get_conflicts_sum() as f32;
+        let least_conflicts = self.get_best_chromosome().get_conflicts_sum() as f32;
+        let diff_conflicts = most_conflicts - least_conflicts;
         log::debug!(
-            "calculating fitness [worst_score={}, best_score={}]",
-            worst_score,
-            best_score
+            "calculating fitness [worst_score={}, best_score={}, diff={}]",
+            most_conflicts,
+            least_conflicts,
+            diff_conflicts
         );
         for chromosome in &mut self.population {
             let conflicts_sum = chromosome.get_conflicts_sum() as f32;
-            let fitness = (worst_score - conflicts_sum) * 100.0 / best_score;
+            let fitness = (most_conflicts - conflicts_sum).powi(3) / diff_conflicts.powi(3);
             chromosome.set_fitness(fitness);
             log::trace!(
                 "calculating fitness for chromosome [conflicts={}, fitness={}]",
@@ -63,36 +64,19 @@ impl GeneticAlgorithm {
         }
     }
 
-    pub fn calc_rank(&mut self) {
-        let fitness_sum = self
-            .population
-            .iter()
-            .map(|chromosome| chromosome.get_fitness())
-            .sum::<f32>();
-        let rank_total = fitness_sum / self.population.len() as f32;
-        log::debug!("calculating rank [rank_total={}]", rank_total);
-        for chromosome in &mut self.population {
-            let fitness = chromosome.get_fitness();
-            let rank = fitness / rank_total;
-            chromosome.set_rank(rank);
-            log::trace!(
-                "calculating rank for chromosome [fitness={}, rank={}]",
-                fitness,
-                rank
-            );
-        }
-    }
-
-    pub fn select_random_chromosomes(&self, max_to_select: usize) -> Vec<usize> {
+    pub fn select_random_chromosomes(&self, min_to_select: usize, max_to_select: usize) -> Vec<usize> {
+        let selection_size = rand::thread_rng().gen_range(min_to_select..max_to_select);
+        let fitness_sum = self.population.iter().map(|chromosome| chromosome.get_fitness()).sum::<f32>();
+        log::debug!("select random chromosomes [selection_size={}, fitness_sum={}]", selection_size, fitness_sum);
         let mut selected_chromosomes = Vec::new();
-        for _ in 0..max_to_select {
-            let roulette_spin = rand::thread_rng().gen_range(1..self.population.len()) as f32;
+        for _ in 0..selection_size {
+            let roulette_spin = rand::thread_rng().gen_range(0.0..fitness_sum);
             let mut selection_rank = 0.0;
             for (index, chromosome) in self.population.iter().enumerate() {
-                selection_rank += chromosome.get_rank();
+                selection_rank += chromosome.get_fitness();
                 if selection_rank > roulette_spin && !selected_chromosomes.contains(&index) {
                     selected_chromosomes.push(index);
-                    log::trace!("selecting chromosome: {}", index);
+                    log::trace!("selecting chromosome: {:?}", chromosome);
                     break;
                 }
             }
@@ -102,8 +86,7 @@ impl GeneticAlgorithm {
 
     pub fn run_epoch(&mut self) -> &Chromosome {
         self.calc_fitness();
-        self.calc_rank();
-        self.select_random_chromosomes(10);
+        self.select_random_chromosomes(SELECTION_MIN, SELECTION_MAX);
         self.get_best_chromosome()
     }
 }
@@ -142,6 +125,6 @@ mod tests {
         genetic_algorithm.calc_fitness();
 
         assert_eq!(genetic_algorithm.get_worst_chromosome().get_fitness(), 0.0);
-        assert_eq!(genetic_algorithm.get_best_chromosome().get_fitness(), 500.0);
+        assert_eq!(genetic_algorithm.get_best_chromosome().get_fitness(), 1.0);
     }
 }

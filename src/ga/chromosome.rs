@@ -1,12 +1,13 @@
-use rand::random;
 use std::collections::HashSet;
 
+use rand::random;
+
+#[derive(Debug)]
 pub struct Chromosome {
     positions: Vec<usize>,
     conflicts: Vec<usize>,
     conflicts_sum: usize,
     fitness: f32,
-    rank: f32,
 }
 
 impl Chromosome {
@@ -19,7 +20,6 @@ impl Chromosome {
             conflicts,
             conflicts_sum,
             fitness: 0.0,
-            rank: 0.0,
         }
     }
 
@@ -39,16 +39,8 @@ impl Chromosome {
         self.fitness
     }
 
-    pub fn get_rank(&self) -> f32 {
-        self.rank
-    }
-
     pub fn set_fitness(&mut self, fitness: f32) {
         self.fitness = fitness;
-    }
-
-    pub fn set_rank(&mut self, rank: f32) {
-        self.rank = rank;
     }
 }
 
@@ -80,7 +72,7 @@ fn count_conflicts(positions: &Vec<usize>) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
-    use crate::ga::chromosome::{generate_distinct_random_values, Chromosome};
+    use crate::ga::chromosome::{Chromosome, generate_distinct_random_values};
 
     #[test]
     fn test_initial_values_generator() {

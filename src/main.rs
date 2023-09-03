@@ -11,14 +11,11 @@ fn main() {
 
     log::info!("start n_queens_problem");
     let mut genetic_algorithm = ga::build_genetic_algorithm(8, 40);
-    log::info!("done building genetic apgorithm");
+    log::info!("done building genetic algorithm");
     let best_chromosome = genetic_algorithm.run_epoch();
     log::info!("done running epoch");
-    let conflicts_sum = best_chromosome.get_conflicts_sum();
-    let fitness = best_chromosome.get_fitness();
     println!("--------------------------------");
-    println!("Best Conflicts: {conflicts_sum}");
-    println!("Fitness:   {fitness}");
+    println!("Best Chromosome: {:?}", best_chromosome);
     ui::draw_board(
         best_chromosome.get_positions(),
         best_chromosome.get_conflicts(),
