@@ -72,7 +72,7 @@ fn count_conflicts(positions: &Vec<usize>) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
-    use crate::ga::chromosome::{Chromosome, generate_distinct_random_values};
+    use crate::ga::chromosome::{generate_distinct_random_values, Chromosome};
 
     #[test]
     fn test_initial_values_generator() {

@@ -64,10 +64,22 @@ impl GeneticAlgorithm {
         }
     }
 
-    pub fn select_random_chromosomes(&self, min_to_select: usize, max_to_select: usize) -> Vec<usize> {
+    pub fn select_random_chromosomes(
+        &self,
+        min_to_select: usize,
+        max_to_select: usize,
+    ) -> Vec<usize> {
         let selection_size = rand::thread_rng().gen_range(min_to_select..max_to_select);
-        let fitness_sum = self.population.iter().map(|chromosome| chromosome.get_fitness()).sum::<f32>();
-        log::debug!("select random chromosomes [selection_size={}, fitness_sum={}]", selection_size, fitness_sum);
+        let fitness_sum = self
+            .population
+            .iter()
+            .map(|chromosome| chromosome.get_fitness())
+            .sum::<f32>();
+        log::debug!(
+            "select random chromosomes [selection_size={}, fitness_sum={}]",
+            selection_size,
+            fitness_sum
+        );
         let mut selected_chromosomes = Vec::new();
         for _ in 0..selection_size {
             let roulette_spin = rand::thread_rng().gen_range(0.0..fitness_sum);
@@ -123,7 +135,6 @@ mod tests {
         ];
         let mut genetic_algorithm = GeneticAlgorithm::new(population);
         genetic_algorithm.calc_fitness();
-
         assert_eq!(genetic_algorithm.get_worst_chromosome().get_fitness(), 0.0);
         assert_eq!(genetic_algorithm.get_best_chromosome().get_fitness(), 1.0);
     }
