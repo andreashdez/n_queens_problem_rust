@@ -4,8 +4,8 @@ use self::chromosome::Chromosome;
 
 pub mod chromosome;
 
-const SELECTION_MIN: usize = 10;
-const SELECTION_MAX: usize = 50;
+const MIN_TO_MATE: usize = 10;
+const MAX_TO_MATE: usize = 50;
 
 pub struct GeneticAlgorithm {
     population: Vec<Chromosome>,
@@ -64,41 +64,48 @@ impl GeneticAlgorithm {
         }
     }
 
-    pub fn select_random_chromosomes(
-        &self,
-        min_to_select: usize,
-        max_to_select: usize,
-    ) -> Vec<usize> {
-        let selection_size = rand::thread_rng().gen_range(min_to_select..max_to_select);
+    pub fn mate_random_chromosomes(&self, min_to_mate: usize, max_to_mate: usize) {
+        let mate_amount = rand::thread_rng().gen_range(min_to_mate..max_to_mate);
         let fitness_sum = self
             .population
             .iter()
             .map(|chromosome| chromosome.get_fitness())
             .sum::<f32>();
         log::debug!(
-            "select random chromosomes [selection_size={}, fitness_sum={}]",
-            selection_size,
+            "select random chromosomes [mate_amount={}, fitness_sum={}]",
+            mate_amount,
             fitness_sum
         );
-        let mut selected_chromosomes = Vec::new();
-        for _ in 0..selection_size {
-            let roulette_spin = rand::thread_rng().gen_range(0.0..fitness_sum);
-            let mut selection_rank = 0.0;
-            for (index, chromosome) in self.population.iter().enumerate() {
-                selection_rank += chromosome.get_fitness();
-                if selection_rank > roulette_spin && !selected_chromosomes.contains(&index) {
-                    selected_chromosomes.push(index);
-                    log::trace!("selecting chromosome: {:?}", chromosome);
-                    break;
-                }
+        for _ in 0..mate_amount {
+            let parent_one = self.select_random_chromosome(fitness_sum).unwrap_or_else(|| self.get_best_chromosome());
+            let parent_two = self.select_random_chromosome(fitness_sum).unwrap_or_else(|| self.get_worst_chromosome());
+            self.mate_chromosomes(parent_one, parent_two);
+        }
+    }
+
+    pub fn select_random_chromosome(&self, fitness_sum: f32) -> Option<&Chromosome> {
+        let roulette_spin = rand::thread_rng().gen_range(0.0..fitness_sum);
+        let mut selection_rank = 0.0;
+        for chromosome in &self.population {
+            selection_rank += chromosome.get_fitness();
+            if selection_rank > roulette_spin {
+                log::trace!("selecting chromosome: {:?}", chromosome);
+                return Some(&chromosome);
             }
         }
-        selected_chromosomes
+        None
+    }
+
+    pub fn mate_chromosomes(&self, parent_one: &Chromosome, parent_two: &Chromosome) {
+        log::debug!("mate chromosomes");
+        log::trace!("parent_one={:?}", *parent_one);
+        log::trace!("parent_two={:?}", *parent_two);
+        //TODO
     }
 
     pub fn run_epoch(&mut self) -> &Chromosome {
         self.calc_fitness();
-        self.select_random_chromosomes(SELECTION_MIN, SELECTION_MAX);
+        self.mate_random_chromosomes(MIN_TO_MATE, MAX_TO_MATE);
         self.get_best_chromosome()
     }
 }
