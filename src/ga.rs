@@ -6,18 +6,15 @@ pub mod chromosome;
 
 const MIN_TO_MATE: usize = 10;
 const MAX_TO_MATE: usize = 50;
+const MAX_EPOCH_COUNT: usize = 50000;
 
 pub struct GeneticAlgorithm {
     population: Vec<Chromosome>,
 }
 
 impl GeneticAlgorithm {
-    pub fn new(population: Vec<Chromosome>) -> Self {
+    fn new(population: Vec<Chromosome>) -> Self {
         Self { population }
-    }
-
-    pub fn get_population(&self) -> &Vec<Chromosome> {
-        &self.population
     }
 
     fn get_best_chromosome(&self) -> &Chromosome {
@@ -39,7 +36,7 @@ impl GeneticAlgorithm {
     //         .sort_by(|a, b| b.get_conflicts_sum().cmp(&a.get_conflicts_sum()));
     // }
 
-    pub fn calc_fitness(&mut self) {
+    fn calc_fitness(&mut self) {
         // self.sort_population();
         // let worst_score = self.population.first().unwrap().get_conflicts_sum() as f32;
         // let mut best_score = self.population.last().unwrap().get_conflicts_sum() as f32;
@@ -64,7 +61,7 @@ impl GeneticAlgorithm {
         }
     }
 
-    pub fn mate_random_chromosomes(&self, min_to_mate: usize, max_to_mate: usize) {
+    fn mate_random_chromosomes(&mut self, min_to_mate: usize, max_to_mate: usize) {
         let mate_amount = rand::thread_rng().gen_range(min_to_mate..max_to_mate);
         let fitness_sum = self
             .population
@@ -79,11 +76,12 @@ impl GeneticAlgorithm {
         for _ in 0..mate_amount {
             let parent_one = self.select_random_chromosome(fitness_sum).unwrap_or_else(|| self.get_best_chromosome());
             let parent_two = self.select_random_chromosome(fitness_sum).unwrap_or_else(|| self.get_worst_chromosome());
-            self.mate_chromosomes(parent_one, parent_two);
+            let child = self.mate_chromosomes(parent_one, parent_two);
+            self.population.push(child);
         }
     }
 
-    pub fn select_random_chromosome(&self, fitness_sum: f32) -> Option<&Chromosome> {
+    fn select_random_chromosome(&self, fitness_sum: f32) -> Option<&Chromosome> {
         let roulette_spin = rand::thread_rng().gen_range(0.0..fitness_sum);
         let mut selection_rank = 0.0;
         for chromosome in &self.population {
@@ -96,17 +94,56 @@ impl GeneticAlgorithm {
         None
     }
 
-    pub fn mate_chromosomes(&self, parent_one: &Chromosome, parent_two: &Chromosome) {
+    fn mate_chromosomes(&self, parent_one: &Chromosome, parent_two: &Chromosome) -> Chromosome {
         log::debug!("mate chromosomes");
         log::trace!("parent_one={:?}", *parent_one);
         log::trace!("parent_two={:?}", *parent_two);
-        //TODO
+        let child_genes = self.pmx(parent_one.get_positions(), parent_two.get_positions());
+        let child = Chromosome::new(child_genes);
+        log::trace!("child={:?}", child);
+        child
     }
 
-    pub fn run_epoch(&mut self) -> &Chromosome {
+    fn pmx(&self, parent_one: Vec<usize>, parent_two: Vec<usize>) -> Vec<usize> {
+        let chromosome_size = parent_one.len();
+        let chromosome_half_size = chromosome_size / 2;
+        let point_one = rand::thread_rng().gen_range(0..chromosome_half_size);
+        let point_two = rand::thread_rng().gen_range(chromosome_half_size..chromosome_size);
+        log::debug!("partially mapped crossover [point_one={}, point_two={}]", point_one, point_two);
+        let mut child_genes = vec![None; parent_one.len()];
+        for i in point_one..point_two {
+            child_genes[i] = Some(parent_one[i]);
+        }
+        log::debug!("child positions one: {:?}", child_genes);
+        for i in point_one..point_two {
+            if !child_genes.contains(&Some(parent_two[i])) {
+                let position = find_position(i, &parent_one, &parent_two, &child_genes);
+                child_genes[position] = Some(parent_two[i]);
+            }
+        }
+        log::debug!("child positions two: {:?}", child_genes);
+        for i in 0..chromosome_size {
+            match child_genes[i] {
+                None => { child_genes[i] = Some(parent_two[i]) }
+                Some(_) => {}
+            }
+        }
+        log::debug!("child positions three: {:?}", child_genes);
+        child_genes.iter().map(|gene| gene.unwrap()).collect()
+    }
+
+    pub fn run_algorithm(&mut self) -> &Chromosome {
         self.calc_fitness();
-        self.mate_random_chromosomes(MIN_TO_MATE, MAX_TO_MATE);
-        self.get_best_chromosome()
+        let mut epoch_counter: usize = 0;
+        loop {
+            epoch_counter += 1;
+            self.mate_random_chromosomes(MIN_TO_MATE, MAX_TO_MATE);
+            self.calc_fitness();
+            log::info!("epoch: {}", epoch_counter);
+            log::info!("best chromosome conflicts sum: {}", self.get_best_chromosome().get_conflicts_sum());
+            if self.get_best_chromosome().get_conflicts_sum() == 0 { return self.get_best_chromosome(); }
+            if epoch_counter > MAX_EPOCH_COUNT { return self.get_best_chromosome(); }
+        }
     }
 }
 
@@ -118,6 +155,15 @@ pub fn build_genetic_algorithm(size: usize, initial_population: usize) -> Geneti
         population.push(chromosome);
     }
     GeneticAlgorithm::new(population)
+}
+
+pub fn find_position(index: usize, parent_one: &Vec<usize>, parent_two: &Vec<usize>, child: &Vec<Option<usize>>) -> usize {
+    let position = parent_two.iter().position(|&p| p == parent_one[index]).unwrap();
+    log::trace!("checking position {}", position);
+    match child[position] {
+        None => { position }
+        Some(_) => { find_position(position, parent_one, parent_two, child) }
+    }
 }
 
 #[cfg(test)]
