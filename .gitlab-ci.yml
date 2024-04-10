@@ -29,24 +29,36 @@
 #   script: echo "Define your deployment script!"
 #   environment: production
 
-image: squidfunk/mkdocs-material:latest
-
-test:
-  stage: test
-  script:
-  - mkdocs build --strict --verbose --site-dir test
-  artifacts:
-    paths:
-    - test
-  rules:
-    - if: $CI_COMMIT_REF_NAME != $CI_DEFAULT_BRANCH
-
 pages:
   stage: deploy
+  image: python:latest
   script:
-  - mkdocs build --strict --verbose
+    - pip install mkdocs-material
+    - mkdocs build --site-dir public
   artifacts:
     paths:
-    - public
+      - public
   rules:
-    - if: $CI_COMMIT_REF_NAME == $CI_DEFAULT_BRANCH
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# image: squidfunk/mkdocs-material:latest
+#
+# test:
+#   stage: test
+#   script:
+#   - mkdocs build --strict --verbose --site-dir test
+#   artifacts:
+#     paths:
+#     - test
+#   rules:
+#     - if: $CI_COMMIT_REF_NAME != $CI_DEFAULT_BRANCH
+#
+# pages:
+#   stage: deploy
+#   script:
+#   - mkdocs build --strict --verbose
+#   artifacts:
+#     paths:
+#     - public
+#   rules:
+#     - if: $CI_COMMIT_REF_NAME == $CI_DEFAULT_BRANCH
