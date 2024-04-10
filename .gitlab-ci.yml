@@ -1,5 +1,5 @@
 # https://hub.docker.com/r/library/rust/tags/
-# image: "rust:latest"
+image: "rust:latest"
 
 # Optional: Install a C compiler, cmake and git into the container.
 # You will often need this when you (or any of your dependencies) depends on C code.
@@ -8,10 +8,10 @@
 #   - apt-get install -yqq --no-install-recommends build-essential
 
 # Use cargo to test the project
-# test:cargo:
-#   script:
-#     - rustc --version && cargo --version  # Print version info for debugging
-#     - cargo test --workspace --verbose
+test:cargo:
+  script:
+    - rustc --version && cargo --version  # Print version info for debugging
+    - cargo test --workspace --verbose
 
 # Optional: Use a third party library to generate gitlab junit reports
 # test:junit-report:
@@ -41,24 +41,3 @@ pages:
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
-# image: squidfunk/mkdocs-material:latest
-#
-# test:
-#   stage: test
-#   script:
-#   - mkdocs build --strict --verbose --site-dir test
-#   artifacts:
-#     paths:
-#     - test
-#   rules:
-#     - if: $CI_COMMIT_REF_NAME != $CI_DEFAULT_BRANCH
-#
-# pages:
-#   stage: deploy
-#   script:
-#   - mkdocs build --strict --verbose
-#   artifacts:
-#     paths:
-#     - public
-#   rules:
-#     - if: $CI_COMMIT_REF_NAME == $CI_DEFAULT_BRANCH
