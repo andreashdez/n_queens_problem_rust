@@ -6,7 +6,7 @@ pub mod chromosome;
 
 const MIN_TO_MATE: usize = 10;
 const MAX_TO_MATE: usize = 50;
-const MAX_EPOCH_COUNT: usize = 50000;
+const MAX_EPOCH_COUNT: usize = 100;
 
 pub struct GeneticAlgorithm {
     population: Vec<Chromosome>,
@@ -31,15 +31,7 @@ impl GeneticAlgorithm {
             .unwrap()
     }
 
-    // fn sort_population(&mut self) {
-    //     self.population
-    //         .sort_by(|a, b| b.get_conflicts_sum().cmp(&a.get_conflicts_sum()));
-    // }
-
     fn calc_fitness(&mut self) {
-        // self.sort_population();
-        // let worst_score = self.population.first().unwrap().get_conflicts_sum() as f32;
-        // let mut best_score = self.population.last().unwrap().get_conflicts_sum() as f32;
         let most_conflicts = self.get_worst_chromosome().get_conflicts_sum() as f32;
         let least_conflicts = self.get_best_chromosome().get_conflicts_sum() as f32;
         let diff_conflicts = most_conflicts - least_conflicts;
@@ -74,8 +66,12 @@ impl GeneticAlgorithm {
             fitness_sum
         );
         for _ in 0..mate_amount {
-            let parent_one = self.select_random_chromosome(fitness_sum).unwrap_or_else(|| self.get_best_chromosome());
-            let parent_two = self.select_random_chromosome(fitness_sum).unwrap_or_else(|| self.get_worst_chromosome());
+            let parent_one = self
+                .select_random_chromosome(fitness_sum)
+                .unwrap_or_else(|| self.get_best_chromosome());
+            let parent_two = self
+                .select_random_chromosome(fitness_sum)
+                .unwrap_or_else(|| self.get_worst_chromosome());
             let child = self.mate_chromosomes(parent_one, parent_two);
             self.population.push(child);
         }
@@ -109,7 +105,11 @@ impl GeneticAlgorithm {
         let chromosome_half_size = chromosome_size / 2;
         let point_one = rand::thread_rng().gen_range(0..chromosome_half_size);
         let point_two = rand::thread_rng().gen_range(chromosome_half_size..chromosome_size);
-        log::debug!("partially mapped crossover [point_one={}, point_two={}]", point_one, point_two);
+        log::debug!(
+            "partially mapped crossover [point_one={}, point_two={}]",
+            point_one,
+            point_two
+        );
         let mut child_genes = vec![None; parent_one.len()];
         for i in point_one..point_two {
             child_genes[i] = Some(parent_one[i]);
@@ -124,7 +124,7 @@ impl GeneticAlgorithm {
         log::debug!("child positions two: {:?}", child_genes);
         for i in 0..chromosome_size {
             match child_genes[i] {
-                None => { child_genes[i] = Some(parent_two[i]) }
+                None => child_genes[i] = Some(parent_two[i]),
                 Some(_) => {}
             }
         }
@@ -140,9 +140,16 @@ impl GeneticAlgorithm {
             self.mate_random_chromosomes(MIN_TO_MATE, MAX_TO_MATE);
             self.calc_fitness();
             log::info!("epoch: {}", epoch_counter);
-            log::info!("best chromosome conflicts sum: {}", self.get_best_chromosome().get_conflicts_sum());
-            if self.get_best_chromosome().get_conflicts_sum() == 0 { return self.get_best_chromosome(); }
-            if epoch_counter > MAX_EPOCH_COUNT { return self.get_best_chromosome(); }
+            log::info!(
+                "best chromosome conflicts sum: {}",
+                self.get_best_chromosome().get_conflicts_sum()
+            );
+            if self.get_best_chromosome().get_conflicts_sum() == 0 {
+                return self.get_best_chromosome();
+            }
+            if epoch_counter > MAX_EPOCH_COUNT {
+                return self.get_best_chromosome();
+            }
         }
     }
 }
@@ -157,12 +164,20 @@ pub fn build_genetic_algorithm(size: usize, initial_population: usize) -> Geneti
     GeneticAlgorithm::new(population)
 }
 
-pub fn find_position(index: usize, parent_one: &Vec<usize>, parent_two: &Vec<usize>, child: &Vec<Option<usize>>) -> usize {
-    let position = parent_two.iter().position(|&p| p == parent_one[index]).unwrap();
+pub fn find_position(
+    index: usize,
+    parent_one: &Vec<usize>,
+    parent_two: &Vec<usize>,
+    child: &Vec<Option<usize>>,
+) -> usize {
+    let position = parent_two
+        .iter()
+        .position(|&p| p == parent_one[index])
+        .unwrap();
     log::trace!("checking position {}", position);
     match child[position] {
-        None => { position }
-        Some(_) => { find_position(position, parent_one, parent_two, child) }
+        None => position,
+        Some(_) => find_position(position, parent_one, parent_two, child),
     }
 }
 

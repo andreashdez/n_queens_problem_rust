@@ -5,12 +5,12 @@ pub mod ui;
 
 fn main() {
     SimpleLogger::new()
-        // .with_level(log::LevelFilter::Info)
+        .with_level(log::LevelFilter::Info)
         .init()
         .unwrap();
 
     log::info!("start n_queens_problem");
-    let mut genetic_algorithm = ga::build_genetic_algorithm(8, 40);
+    let mut genetic_algorithm = ga::build_genetic_algorithm(20, 400);
     log::info!("done building genetic algorithm");
     let best_chromosome = genetic_algorithm.run_algorithm();
     log::info!("done running epoch");
