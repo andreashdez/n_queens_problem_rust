@@ -10,12 +10,17 @@ fn main() {
         .unwrap();
 
     log::info!("start n_queens_problem");
-    let mut genetic_algorithm = ga::build_genetic_algorithm(20, 400);
+    let mut genetic_algorithm = ga::build_genetic_algorithm(16, 400);
     log::info!("done building genetic algorithm");
-    let best_chromosome = genetic_algorithm.run_algorithm();
+    genetic_algorithm.run_algorithm();
+    let best_chromosome = genetic_algorithm.get_best_chromosome();
+    let worst_chromosome = genetic_algorithm.get_worst_chromosome();
+    let population_size = genetic_algorithm.get_population_size();
     log::info!("done running epoch");
     println!("--------------------------------");
-    println!("Best Chromosome: {:?}", best_chromosome);
+    println!("Best  = {:?}", best_chromosome);
+    println!("Worst = {:?}", worst_chromosome);
+    println!("Final Population: {:?}", population_size);
     ui::draw_board(
         best_chromosome.get_positions(),
         best_chromosome.get_conflicts(),
