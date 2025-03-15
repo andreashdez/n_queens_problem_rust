@@ -4,9 +4,9 @@ use self::chromosome::Chromosome;
 
 pub mod chromosome;
 
-const MIN_TO_MATE: usize = 10;
-const MAX_TO_MATE: usize = 50;
-const MAX_EPOCH_COUNT: usize = 5000;
+const MIN_TO_MATE: u16 = 10;
+const MAX_TO_MATE: u16 = 50;
+const MAX_EPOCH_COUNT: u16 = 5000;
 
 pub struct GeneticAlgorithm {
     population: Vec<Chromosome>,
@@ -17,8 +17,8 @@ impl GeneticAlgorithm {
         Self { population }
     }
 
-    pub fn get_population_size(&self) -> usize {
-        self.population.len()
+    pub fn get_population_size(&self) -> u16 {
+        self.population.len() as u16
     }
 
     pub fn run_algorithm(&mut self) {
@@ -74,8 +74,8 @@ impl GeneticAlgorithm {
         }
     }
 
-    fn mate_random_chromosomes(&mut self, min_to_mate: usize, max_to_mate: usize) {
-        let mate_amount = rand::thread_rng().gen_range(min_to_mate..max_to_mate);
+    fn mate_random_chromosomes(&mut self, min_to_mate: u16, max_to_mate: u16) {
+        let mate_amount = rand::rng().random_range(min_to_mate..max_to_mate);
         let fitness_sum = self
             .population
             .iter()
@@ -99,7 +99,7 @@ impl GeneticAlgorithm {
     }
 
     fn select_random_chromosome(&self, fitness_sum: f32) -> Option<&Chromosome> {
-        let roulette_spin = rand::thread_rng().gen_range(0.0..fitness_sum);
+        let roulette_spin = rand::rng().random_range(0.0..fitness_sum);
         let mut selection_rank = 0.0;
         for chromosome in &self.population {
             selection_rank += chromosome.get_fitness();
@@ -112,7 +112,7 @@ impl GeneticAlgorithm {
     }
 }
 
-pub fn build_genetic_algorithm(size: usize, initial_population: usize) -> GeneticAlgorithm {
+pub fn build_genetic_algorithm(size: u16, initial_population: u16) -> GeneticAlgorithm {
     let mut population: Vec<Chromosome> = Vec::new();
     for _ in 0..initial_population {
         let positions = chromosome::generate_distinct_random_values(size);
@@ -132,11 +132,11 @@ fn mate_chromosomes(parent_one: &Chromosome, parent_two: &Chromosome) -> Chromos
     child
 }
 
-fn pmx(parent_one: Vec<usize>, parent_two: Vec<usize>) -> Vec<usize> {
+fn pmx(parent_one: Vec<u16>, parent_two: Vec<u16>) -> Vec<u16> {
     let chromosome_size = parent_one.len();
     let chromosome_half_size = chromosome_size / 2;
-    let point_one = rand::thread_rng().gen_range(0..chromosome_half_size);
-    let point_two = rand::thread_rng().gen_range(chromosome_half_size..chromosome_size);
+    let point_one = rand::rng().random_range(0..chromosome_half_size);
+    let point_two = rand::rng().random_range(chromosome_half_size..chromosome_size);
     log::debug!(
         "partially mapped crossover [point_one={}, point_two={}]",
         point_one,
@@ -166,9 +166,9 @@ fn pmx(parent_one: Vec<usize>, parent_two: Vec<usize>) -> Vec<usize> {
 
 fn find_position(
     index: usize,
-    parent_one: &Vec<usize>,
-    parent_two: &Vec<usize>,
-    child: &Vec<Option<usize>>,
+    parent_one: &Vec<u16>,
+    parent_two: &Vec<u16>,
+    child: &Vec<Option<u16>>,
 ) -> usize {
     let position = parent_two
         .iter()
@@ -183,7 +183,7 @@ fn find_position(
 
 #[cfg(test)]
 mod tests {
-    use super::{chromosome::Chromosome, GeneticAlgorithm};
+    use super::{GeneticAlgorithm, chromosome::Chromosome};
 
     #[test]
     fn test_fitness_calculation() {

@@ -1,12 +1,12 @@
-pub fn draw_board(positions: Vec<usize>, conflicts: Vec<usize>) {
+pub fn draw_board(positions: Vec<u16>, conflicts: Vec<u16>) {
     let size = positions.len();
     draw_top_row(size);
     for y in 0..size {
         print!("║ ");
         for x in 0..size {
-            let y_position = *positions.get(x).unwrap();
+            let y_position = *positions.get(x).unwrap_or(&0) as usize;
             if y_position == y {
-                let current_conflicts = conflicts.get(x).unwrap();
+                let current_conflicts = conflicts.get(x).unwrap_or(&0);
                 print!("{current_conflicts:0>2}");
             } else {
                 print!("  ");

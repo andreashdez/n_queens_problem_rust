@@ -4,16 +4,16 @@ use rand::random;
 
 #[derive(Debug)]
 pub struct Chromosome {
-    positions: Vec<usize>,
-    conflicts: Vec<usize>,
-    conflicts_sum: usize,
+    positions: Vec<u16>,
+    conflicts: Vec<u16>,
+    conflicts_sum: u16,
     fitness: f32,
 }
 
 impl Chromosome {
-    pub fn new(positions: Vec<usize>) -> Self {
+    pub fn new(positions: Vec<u16>) -> Self {
         let conflicts = count_conflicts(&positions);
-        let conflicts_sum = conflicts.iter().sum::<usize>() / 2;
+        let conflicts_sum = conflicts.iter().sum::<u16>() / 2;
         log::debug!("chromosome conflicts sum: {conflicts_sum}");
         Self {
             positions,
@@ -23,15 +23,15 @@ impl Chromosome {
         }
     }
 
-    pub fn get_positions(&self) -> Vec<usize> {
+    pub fn get_positions(&self) -> Vec<u16> {
         self.positions.to_vec()
     }
 
-    pub fn get_conflicts(&self) -> Vec<usize> {
+    pub fn get_conflicts(&self) -> Vec<u16> {
         self.conflicts.to_vec()
     }
 
-    pub fn get_conflicts_sum(&self) -> usize {
+    pub fn get_conflicts_sum(&self) -> u16 {
         self.conflicts_sum
     }
 
@@ -44,15 +44,15 @@ impl Chromosome {
     }
 }
 
-pub fn generate_distinct_random_values(size: usize) -> Vec<usize> {
+pub fn generate_distinct_random_values(size: u16) -> Vec<u16> {
     let mut out_map = HashSet::new();
-    while out_map.len() < size {
-        out_map.insert(random::<usize>() % size);
+    while out_map.len() < size as usize {
+        out_map.insert(random::<u16>() % size);
     }
     out_map.into_iter().collect::<Vec<_>>()
 }
 
-fn count_conflicts(positions: &Vec<usize>) -> Vec<usize> {
+fn count_conflicts(positions: &Vec<u16>) -> Vec<u16> {
     let size = positions.len();
     let mut conflicts = vec![0; size];
     for x_two in 0..size - 1 {
@@ -60,7 +60,7 @@ fn count_conflicts(positions: &Vec<usize>) -> Vec<usize> {
             let distance = x_one - x_two;
             let y_one = positions[x_one];
             let y_two = positions[x_two];
-            if y_one.abs_diff(y_two) == distance {
+            if y_one.abs_diff(y_two) == distance as u16 {
                 log::trace!("found conflict: ({x_one},{y_one}) -> ({x_two},{y_two})");
                 conflicts[x_one] += 1;
                 conflicts[x_two] += 1;
@@ -72,7 +72,7 @@ fn count_conflicts(positions: &Vec<usize>) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
-    use crate::ga::chromosome::{generate_distinct_random_values, Chromosome};
+    use crate::ga::chromosome::{Chromosome, generate_distinct_random_values};
 
     #[test]
     fn test_initial_values_generator() {
