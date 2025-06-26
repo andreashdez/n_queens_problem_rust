@@ -144,7 +144,7 @@ fn pmx(parent_one: Vec<u16>, parent_two: Vec<u16>) -> Vec<u16> {
     }
     log::debug!("child positions two: {child_genes:?}");
     for i in 0..chromosome_size {
-        if let None = child_genes[i] {
+        if child_genes[i].is_none() {
             child_genes[i] = Some(parent_two[i]);
         }
     }
