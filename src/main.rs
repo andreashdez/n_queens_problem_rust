@@ -10,7 +10,7 @@ fn main() {
         .unwrap();
 
     log::info!("start n_queens_problem");
-    let mut genetic_algorithm = ga::build_genetic_algorithm(16, 400);
+    let mut genetic_algorithm = ga::build_genetic_algorithm(16, 40000);
     log::info!("done building genetic algorithm");
     genetic_algorithm.run_algorithm();
     let best_chromosome = genetic_algorithm.get_best_chromosome();

@@ -26,11 +26,17 @@ impl GeneticAlgorithm {
         for epoch in 0..MAX_EPOCH_COUNT {
             self.mate_random_chromosomes(MIN_TO_MATE, MAX_TO_MATE);
             self.calc_fitness();
-            log::info!("epoch: {}", epoch);
             log::info!(
-                "best chromosome conflicts sum: {}",
-                self.get_best_chromosome().get_conflicts_sum()
+                "running ga epoch best_conflict_sum={} epoch={} population_size={}",
+                self.get_best_chromosome().get_conflicts_sum(),
+                epoch,
+                self.get_population_size()
             );
+            // log::info!("epoch: {}", epoch);
+            // log::info!(
+            //     "best chromosome conflicts sum: {}",
+            //     self.get_best_chromosome().get_conflicts_sum()
+            // );
             if self.get_best_chromosome().get_conflicts_sum() == 0 {
                 return;
             }
