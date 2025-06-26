@@ -98,7 +98,7 @@ impl GeneticAlgorithm {
             selection_rank += chromosome.get_fitness();
             if selection_rank > roulette_spin {
                 log::trace!("selecting chromosome: {chromosome:?}");
-                return Some(&chromosome);
+                return Some(chromosome);
             }
         }
         None
@@ -144,9 +144,8 @@ fn pmx(parent_one: Vec<u16>, parent_two: Vec<u16>) -> Vec<u16> {
     }
     log::debug!("child positions two: {child_genes:?}");
     for i in 0..chromosome_size {
-        match child_genes[i] {
-            None => child_genes[i] = Some(parent_two[i]),
-            Some(_) => {}
+        if let None = child_genes[i] {
+            child_genes[i] = Some(parent_two[i]);
         }
     }
     log::debug!("child positions three: {child_genes:?}");

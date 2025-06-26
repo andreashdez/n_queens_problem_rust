@@ -52,7 +52,7 @@ pub fn generate_distinct_random_values(size: u16) -> Vec<u16> {
     out_map.into_iter().collect::<Vec<_>>()
 }
 
-fn count_conflicts(positions: &Vec<u16>) -> Vec<u16> {
+fn count_conflicts(positions: &[u16]) -> Vec<u16> {
     let size = positions.len();
     let mut conflicts = vec![0; size];
     for x_two in 0..size - 1 {
