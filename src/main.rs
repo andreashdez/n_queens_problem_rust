@@ -5,12 +5,12 @@ pub mod ui;
 
 fn main() {
     SimpleLogger::new()
-        .with_level(log::LevelFilter::Info)
+        .with_level(log::LevelFilter::Trace)
         .init()
         .unwrap();
 
     log::info!("start n_queens_problem");
-    let mut genetic_algorithm = ga::build_genetic_algorithm(16, 40000);
+    let mut genetic_algorithm = ga::build_genetic_algorithm(8, 40000);
     log::info!("done building genetic algorithm");
     genetic_algorithm.run_algorithm();
     let best_chromosome = genetic_algorithm.get_best_chromosome();
@@ -18,9 +18,9 @@ fn main() {
     let population_size = genetic_algorithm.get_population_size();
     log::info!("done running epoch");
     println!("--------------------------------");
-    println!("Best  = {:?}", best_chromosome);
-    println!("Worst = {:?}", worst_chromosome);
-    println!("Final Population: {:?}", population_size);
+    println!("Best  = {best_chromosome:?}");
+    println!("Worst = {worst_chromosome:?}");
+    println!("Final Population: {population_size:?}");
     ui::draw_board(
         best_chromosome.get_positions(),
         best_chromosome.get_conflicts(),

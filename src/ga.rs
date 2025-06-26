@@ -26,18 +26,12 @@ impl GeneticAlgorithm {
         for epoch in 0..MAX_EPOCH_COUNT {
             self.mate_random_chromosomes(MIN_TO_MATE, MAX_TO_MATE);
             self.calc_fitness();
+            let best_conflicts_sum = self.get_best_chromosome().get_conflicts_sum();
+            let population_size = self.get_population_size();
             log::info!(
-                "running ga epoch best_conflict_sum={} epoch={} population_size={}",
-                self.get_best_chromosome().get_conflicts_sum(),
-                epoch,
-                self.get_population_size()
+                "running ga epoch best_conflicts_sum={best_conflicts_sum} epoch={epoch} population_size={population_size}",
             );
-            // log::info!("epoch: {}", epoch);
-            // log::info!(
-            //     "best chromosome conflicts sum: {}",
-            //     self.get_best_chromosome().get_conflicts_sum()
-            // );
-            if self.get_best_chromosome().get_conflicts_sum() == 0 {
+            if best_conflicts_sum == 0 {
                 return;
             }
         }
@@ -63,19 +57,14 @@ impl GeneticAlgorithm {
         let least_conflicts = self.get_best_chromosome().get_conflicts_sum() as f32;
         let diff_conflicts = most_conflicts - least_conflicts;
         log::debug!(
-            "calculating fitness [worst_score={}, best_score={}, diff={}]",
-            most_conflicts,
-            least_conflicts,
-            diff_conflicts
+            "calculating fitness [worst_score={most_conflicts}, best_score={least_conflicts}, diff={diff_conflicts}]",
         );
         for chromosome in &mut self.population {
             let conflicts_sum = chromosome.get_conflicts_sum() as f32;
             let fitness = (most_conflicts - conflicts_sum).powi(3) / diff_conflicts.powi(3);
             chromosome.set_fitness(fitness);
             log::trace!(
-                "calculating fitness for chromosome [conflicts={}, fitness={}]",
-                conflicts_sum,
-                fitness
+                "calculating fitness for chromosome [conflicts={conflicts_sum}, fitness={fitness}]",
             );
         }
     }
@@ -88,9 +77,7 @@ impl GeneticAlgorithm {
             .map(|chromosome| chromosome.get_fitness())
             .sum::<f32>();
         log::debug!(
-            "select random chromosomes [mate_amount={}, fitness_sum={}]",
-            mate_amount,
-            fitness_sum
+            "select random chromosomes [mate_amount={mate_amount}, fitness_sum={fitness_sum}]",
         );
         for _ in 0..mate_amount {
             let parent_one = self
@@ -110,7 +97,7 @@ impl GeneticAlgorithm {
         for chromosome in &self.population {
             selection_rank += chromosome.get_fitness();
             if selection_rank > roulette_spin {
-                log::trace!("selecting chromosome: {:?}", chromosome);
+                log::trace!("selecting chromosome: {chromosome:?}");
                 return Some(&chromosome);
             }
         }
@@ -130,11 +117,11 @@ pub fn build_genetic_algorithm(size: u16, initial_population: u16) -> GeneticAlg
 
 fn mate_chromosomes(parent_one: &Chromosome, parent_two: &Chromosome) -> Chromosome {
     log::debug!("mate chromosomes");
-    log::trace!("parent_one={:?}", *parent_one);
-    log::trace!("parent_two={:?}", *parent_two);
+    log::trace!("parent_one={parent_one:?}");
+    log::trace!("parent_two={parent_two:?}");
     let child_genes = pmx(parent_one.get_positions(), parent_two.get_positions());
     let child = Chromosome::new(child_genes);
-    log::trace!("child={:?}", child);
+    log::trace!("child={child:?}");
     child
 }
 
@@ -143,30 +130,26 @@ fn pmx(parent_one: Vec<u16>, parent_two: Vec<u16>) -> Vec<u16> {
     let chromosome_half_size = chromosome_size / 2;
     let point_one = rand::rng().random_range(0..chromosome_half_size);
     let point_two = rand::rng().random_range(chromosome_half_size..chromosome_size);
-    log::debug!(
-        "partially mapped crossover [point_one={}, point_two={}]",
-        point_one,
-        point_two
-    );
+    log::debug!("partially mapped crossover [point_one={point_one}, point_two={point_two}]");
     let mut child_genes = vec![None; parent_one.len()];
     for i in point_one..point_two {
         child_genes[i] = Some(parent_one[i]);
     }
-    log::debug!("child positions one: {:?}", child_genes);
+    log::debug!("child positions one: {child_genes:?}");
     for i in point_one..point_two {
         if !child_genes.contains(&Some(parent_two[i])) {
             let position = find_position(i, &parent_one, &parent_two, &child_genes);
             child_genes[position] = Some(parent_two[i]);
         }
     }
-    log::debug!("child positions two: {:?}", child_genes);
+    log::debug!("child positions two: {child_genes:?}");
     for i in 0..chromosome_size {
         match child_genes[i] {
             None => child_genes[i] = Some(parent_two[i]),
             Some(_) => {}
         }
     }
-    log::debug!("child positions three: {:?}", child_genes);
+    log::debug!("child positions three: {child_genes:?}");
     child_genes.iter().map(|gene| gene.unwrap()).collect()
 }
 
@@ -180,7 +163,7 @@ fn find_position(
         .iter()
         .position(|&p| p == parent_one[index])
         .unwrap();
-    log::trace!("checking position {}", position);
+    log::trace!("checking position {position}");
     match child[position] {
         None => position,
         Some(_) => find_position(position, parent_one, parent_two, child),
