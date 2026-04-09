@@ -1,5 +1,10 @@
-pub fn draw_board(positions: Vec<u16>, conflicts: Vec<u16>) {
+pub fn draw_board(positions: Vec<u16>, conflicts: Vec<u32>) {
     let size = positions.len();
+    if size == 0 {
+        println!("(empty board)");
+        return;
+    }
+
     draw_top_row(size);
     for y in 0..size {
         print!("║ ");

@@ -1,19 +1,17 @@
-use std::collections::HashSet;
-
-use rand::random;
+use rand::{Rng, seq::SliceRandom};
 
 #[derive(Debug)]
 pub struct Chromosome {
     positions: Vec<u16>,
-    conflicts: Vec<u16>,
-    conflicts_sum: u16,
+    conflicts: Vec<u32>,
+    conflicts_sum: u32,
     fitness: f32,
 }
 
 impl Chromosome {
     pub fn new(positions: Vec<u16>) -> Self {
         let conflicts = count_conflicts(&positions);
-        let conflicts_sum = conflicts.iter().sum::<u16>() / 2;
+        let conflicts_sum = conflicts.iter().sum::<u32>() / 2;
         log::debug!("chromosome conflicts sum: {conflicts_sum}");
         Self {
             positions,
@@ -23,15 +21,30 @@ impl Chromosome {
         }
     }
 
+    pub fn mutate_swap(&mut self, rng: &mut impl Rng) {
+        if self.positions.len() < 2 {
+            return;
+        }
+
+        let index_one = rng.random_range(0..self.positions.len());
+        let mut index_two = rng.random_range(0..(self.positions.len() - 1));
+        if index_two >= index_one {
+            index_two += 1;
+        }
+
+        self.positions.swap(index_one, index_two);
+        self.recalculate_conflicts();
+    }
+
     pub fn get_positions(&self) -> Vec<u16> {
         self.positions.to_vec()
     }
 
-    pub fn get_conflicts(&self) -> Vec<u16> {
+    pub fn get_conflicts(&self) -> Vec<u32> {
         self.conflicts.to_vec()
     }
 
-    pub fn get_conflicts_sum(&self) -> u16 {
+    pub fn get_conflicts_sum(&self) -> u32 {
         self.conflicts_sum
     }
 
@@ -42,25 +55,38 @@ impl Chromosome {
     pub fn set_fitness(&mut self, fitness: f32) {
         self.fitness = fitness;
     }
+
+    fn recalculate_conflicts(&mut self) {
+        self.conflicts = count_conflicts(&self.positions);
+        self.conflicts_sum = self.conflicts.iter().sum::<u32>() / 2;
+        self.fitness = 0.0;
+    }
 }
 
 pub fn generate_distinct_random_values(size: u16) -> Vec<u16> {
-    let mut out_map = HashSet::new();
-    while out_map.len() < size as usize {
-        out_map.insert(random::<u16>() % size);
-    }
-    out_map.into_iter().collect::<Vec<_>>()
+    let mut rng = rand::rng();
+    generate_distinct_random_values_with_rng(size, &mut rng)
 }
 
-fn count_conflicts(positions: &[u16]) -> Vec<u16> {
+pub fn generate_distinct_random_values_with_rng(size: u16, rng: &mut impl Rng) -> Vec<u16> {
+    let mut values = (0..size).collect::<Vec<_>>();
+    values.shuffle(rng);
+    values
+}
+
+fn count_conflicts(positions: &[u16]) -> Vec<u32> {
     let size = positions.len();
     let mut conflicts = vec![0; size];
+    if size < 2 {
+        return conflicts;
+    }
+
     for x_two in 0..size - 1 {
         for x_one in x_two + 1..size {
             let distance = x_one - x_two;
             let y_one = positions[x_one];
             let y_two = positions[x_two];
-            if y_one.abs_diff(y_two) == distance as u16 {
+            if usize::from(y_one.abs_diff(y_two)) == distance {
                 log::trace!("found conflict: ({x_one},{y_one}) -> ({x_two},{y_two})");
                 conflicts[x_one] += 1;
                 conflicts[x_two] += 1;
@@ -72,6 +98,8 @@ fn count_conflicts(positions: &[u16]) -> Vec<u16> {
 
 #[cfg(test)]
 mod tests {
+    use rand::{SeedableRng, rngs::StdRng};
+
     use crate::ga::chromosome::{Chromosome, generate_distinct_random_values};
 
     #[test]
@@ -97,5 +125,24 @@ mod tests {
         let chromosome = Chromosome::new(positions);
         let conflicts_sum = chromosome.get_conflicts_sum();
         assert_eq!(conflicts_sum, 2);
+    }
+
+    #[test]
+    fn test_conflicts_counter_small_boards() {
+        let empty_board = Chromosome::new(vec![]);
+        assert_eq!(empty_board.get_conflicts_sum(), 0);
+
+        let single_queen = Chromosome::new(vec![0]);
+        assert_eq!(single_queen.get_conflicts_sum(), 0);
+    }
+
+    #[test]
+    fn test_initial_values_generator_zero_size() {
+        let mut seeded_rng = StdRng::seed_from_u64(1234);
+        let values = super::generate_distinct_random_values_with_rng(0, &mut seeded_rng);
+        assert!(values.is_empty());
+
+        let values_with_thread_rng = generate_distinct_random_values(0);
+        assert!(values_with_thread_rng.is_empty());
     }
 }
