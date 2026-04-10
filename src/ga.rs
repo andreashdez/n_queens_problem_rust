@@ -139,19 +139,22 @@ impl GeneticAlgorithm {
         );
 
         for _ in 0..mate_amount {
-            let parent_one = self.select_parent_positions(fitness_sum);
-            let parent_two = self.select_parent_positions(fitness_sum);
-            let child = mate_chromosomes(&parent_one, &parent_two, &mut self.rng);
+            let Some(parent_one_index) = self.select_parent_index(fitness_sum) else {
+                break;
+            };
+            let Some(parent_two_index) = self.select_parent_index(fitness_sum) else {
+                break;
+            };
+
+            let population = &self.population;
+            let rng = &mut self.rng;
+            let child = mate_chromosomes(
+                population[parent_one_index].get_positions(),
+                population[parent_two_index].get_positions(),
+                rng,
+            );
             self.population.push(child);
         }
-    }
-
-    fn select_parent_positions(&mut self, fitness_sum: f32) -> Vec<u16> {
-        let Some(parent_index) = self.select_parent_index(fitness_sum) else {
-            return Vec::new();
-        };
-
-        self.population[parent_index].get_positions()
     }
 
     fn select_parent_index(&mut self, fitness_sum: f32) -> Option<usize> {
@@ -307,18 +310,32 @@ fn pmx(parent_one: &[u16], parent_two: &[u16], rng: &mut impl Rng) -> Vec<u16> {
 
     log::debug!("partially mapped crossover [point_one={point_one}, point_two={point_two}]");
 
+    let mut parent_two_positions = vec![usize::MAX; chromosome_size];
+    for (index, &gene) in parent_two.iter().enumerate() {
+        parent_two_positions[usize::from(gene)] = index;
+    }
+
     let mut child_genes = vec![None; parent_one.len()];
+    let mut child_used = vec![false; chromosome_size];
 
     for i in point_one..point_two {
-        child_genes[i] = Some(parent_one[i]);
+        let gene = parent_one[i];
+        child_genes[i] = Some(gene);
+        child_used[usize::from(gene)] = true;
     }
 
     log::debug!("child positions one: {child_genes:?}");
 
-    for i in point_one..point_two {
-        if !child_genes.contains(&Some(parent_two[i])) {
-            let position = find_position(i, parent_one, parent_two, &child_genes);
-            child_genes[position] = Some(parent_two[i]);
+    for (i, &gene) in parent_two
+        .iter()
+        .enumerate()
+        .take(point_two)
+        .skip(point_one)
+    {
+        if !child_used[usize::from(gene)] {
+            let position = find_position(i, parent_one, &parent_two_positions, &child_genes);
+            child_genes[position] = Some(gene);
+            child_used[usize::from(gene)] = true;
         }
     }
 
@@ -340,18 +357,28 @@ fn pmx(parent_one: &[u16], parent_two: &[u16], rng: &mut impl Rng) -> Vec<u16> {
 fn find_position(
     index: usize,
     parent_one: &[u16],
-    parent_two: &[u16],
+    parent_two_positions: &[usize],
     child: &[Option<u16>],
 ) -> usize {
-    let position = parent_two
-        .iter()
-        .position(|&p| p == parent_one[index])
-        .expect("parent one genes should always exist in parent two");
+    let mut current_index = index;
 
-    log::trace!("checking position {position}");
-    match child[position] {
-        None => position,
-        Some(_) => find_position(position, parent_one, parent_two, child),
+    loop {
+        let mapped_gene = usize::from(parent_one[current_index]);
+        let position = *parent_two_positions
+            .get(mapped_gene)
+            .expect("parent one genes should fit parent two index map");
+        assert_ne!(
+            position,
+            usize::MAX,
+            "parent one genes should always exist in parent two"
+        );
+
+        log::trace!("checking position {position}");
+        if child[position].is_none() {
+            return position;
+        }
+
+        current_index = position;
     }
 }
 

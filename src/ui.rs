@@ -1,4 +1,4 @@
-pub fn draw_board(positions: Vec<u16>, conflicts: Vec<u32>) {
+pub fn draw_board(positions: &[u16], conflicts: &[u32]) {
     let size = positions.len();
     if size == 0 {
         println!("(empty board)");

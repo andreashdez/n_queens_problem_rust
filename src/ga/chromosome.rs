@@ -36,12 +36,12 @@ impl Chromosome {
         self.recalculate_conflicts();
     }
 
-    pub fn get_positions(&self) -> Vec<u16> {
-        self.positions.to_vec()
+    pub fn get_positions(&self) -> &[u16] {
+        &self.positions
     }
 
-    pub fn get_conflicts(&self) -> Vec<u32> {
-        self.conflicts.to_vec()
+    pub fn get_conflicts(&self) -> &[u32] {
+        &self.conflicts
     }
 
     pub fn get_conflicts_sum(&self) -> u32 {
