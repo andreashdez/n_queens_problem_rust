@@ -14,7 +14,7 @@ cargo run --release
 Run with explicit parameters:
 
 ```bash
-cargo run --release -- --n 18 --population 40000 --epochs 5000 --seed 42 --mutation-rate 0.08 --elite-ratio 0.10
+cargo run --release -- --size 18 --population 40000 --epochs 5000 --seed 42 --mutation-rate 0.08 --elite-ratio 0.10
 ```
 
 Short aliases are also available:

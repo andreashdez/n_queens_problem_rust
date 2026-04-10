@@ -11,6 +11,9 @@ image: "rust:latest"
 test:cargo:
   script:
     - rustc --version && cargo --version  # Print version info for debugging
+    - rustup component add rustfmt clippy
+    - cargo fmt --check
+    - cargo clippy --all-targets --all-features -- -D warnings
     - cargo test --workspace --verbose
 
 # Optional: Use a third party library to generate gitlab junit reports
@@ -40,4 +43,3 @@ pages:
       - public
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-
