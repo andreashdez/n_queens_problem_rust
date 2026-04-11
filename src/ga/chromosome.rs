@@ -1,4 +1,4 @@
-use rand::{Rng, seq::SliceRandom};
+use rand::{seq::SliceRandom, Rng};
 
 #[derive(Debug)]
 pub struct Chromosome {
@@ -81,6 +81,45 @@ fn count_conflicts(positions: &[u16]) -> Vec<u32> {
         return conflicts;
     }
 
+    if positions.iter().any(|&y| usize::from(y) >= size) {
+        log::debug!(
+            "found out-of-bounds queen positions for board size {size}; using pairwise conflict counting"
+        );
+        return count_conflicts_pairwise(positions);
+    }
+
+    let diagonal_span = size * 2 - 1;
+    let diagonal_offset = size - 1;
+    let mut descending_diagonals = vec![0u32; diagonal_span];
+    let mut ascending_diagonals = vec![0u32; diagonal_span];
+
+    for (x, &y) in positions.iter().enumerate() {
+        let y = usize::from(y);
+        let descending_diagonal = x + diagonal_offset - y;
+        let ascending_diagonal = x + y;
+        descending_diagonals[descending_diagonal] += 1;
+        ascending_diagonals[ascending_diagonal] += 1;
+    }
+
+    for (x, &y) in positions.iter().enumerate() {
+        let y = usize::from(y);
+        let descending_diagonal = x + diagonal_offset - y;
+        let ascending_diagonal = x + y;
+        let descending_conflicts = descending_diagonals[descending_diagonal].saturating_sub(1);
+        let ascending_conflicts = ascending_diagonals[ascending_diagonal].saturating_sub(1);
+        conflicts[x] = descending_conflicts + ascending_conflicts;
+    }
+
+    conflicts
+}
+
+fn count_conflicts_pairwise(positions: &[u16]) -> Vec<u32> {
+    let size = positions.len();
+    let mut conflicts = vec![0; size];
+    if size < 2 {
+        return conflicts;
+    }
+
     for x_two in 0..size - 1 {
         for x_one in x_two + 1..size {
             let distance = x_one - x_two;
@@ -93,14 +132,15 @@ fn count_conflicts(positions: &[u16]) -> Vec<u32> {
             }
         }
     }
+
     conflicts
 }
 
 #[cfg(test)]
 mod tests {
-    use rand::{SeedableRng, rngs::StdRng};
+    use rand::{rngs::StdRng, SeedableRng};
 
-    use crate::ga::chromosome::{Chromosome, generate_distinct_random_values};
+    use crate::ga::chromosome::{generate_distinct_random_values, Chromosome};
 
     #[test]
     fn test_initial_values_generator() {
@@ -144,5 +184,28 @@ mod tests {
 
         let values_with_thread_rng = generate_distinct_random_values(0);
         assert!(values_with_thread_rng.is_empty());
+    }
+
+    #[test]
+    fn test_count_conflicts_matches_pairwise_counter() {
+        let mut seeded_rng = StdRng::seed_from_u64(2026);
+
+        for size in 2u16..=64 {
+            for _ in 0..50 {
+                let positions =
+                    super::generate_distinct_random_values_with_rng(size, &mut seeded_rng);
+                let optimized_conflicts = super::count_conflicts(&positions);
+                let pairwise_conflicts = super::count_conflicts_pairwise(&positions);
+                assert_eq!(optimized_conflicts, pairwise_conflicts);
+            }
+        }
+    }
+
+    #[test]
+    fn test_count_conflicts_with_out_of_bounds_positions() {
+        let positions = vec![8, 1, 3, 0];
+        let optimized_conflicts = super::count_conflicts(&positions);
+        let pairwise_conflicts = super::count_conflicts_pairwise(&positions);
+        assert_eq!(optimized_conflicts, pairwise_conflicts);
     }
 }
