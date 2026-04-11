@@ -6,6 +6,7 @@ pub mod chromosome;
 
 const MIN_TO_MATE: usize = 10;
 const MAX_TO_MATE: usize = 50;
+const TARGET_EPOCH_PROGRESS_LOGS: u32 = 20;
 pub const DEFAULT_MUTATION_RATE: f32 = 0.08;
 pub const DEFAULT_ELITE_RATIO: f32 = 0.10;
 
@@ -48,9 +49,19 @@ impl GeneticAlgorithm {
         }
 
         self.calc_fitness();
-        if self.get_best_chromosome().get_conflicts_sum() == 0 {
+        let mut best_conflicts_sum = self.get_best_chromosome().get_conflicts_sum();
+        if best_conflicts_sum == 0 {
+            log::info!("ga solved in initial population");
             return;
         }
+
+        let progress_log_interval = epoch_progress_log_interval(self.max_epoch_count);
+        log::info!(
+            "running ga epochs={} population_size={} progress_log_interval={} initial_best_conflicts_sum={best_conflicts_sum}",
+            self.max_epoch_count,
+            self.get_population_size(),
+            progress_log_interval,
+        );
 
         for epoch in 0..self.max_epoch_count {
             self.mate_random_chromosomes(MIN_TO_MATE, MAX_TO_MATE);
@@ -58,18 +69,38 @@ impl GeneticAlgorithm {
             self.select_survivors();
             self.calc_fitness();
 
-            let best_conflicts_sum = self.get_best_chromosome().get_conflicts_sum();
+            let epoch_best_conflicts_sum = self.get_best_chromosome().get_conflicts_sum();
             let population_size = self.get_population_size();
-            log::info!(
-                "running ga epoch best_conflicts_sum={best_conflicts_sum} epoch={epoch} population_size={population_size}",
-            );
+            let epoch_number = epoch + 1;
 
-            if best_conflicts_sum == 0 {
+            if epoch_best_conflicts_sum == 0 {
+                log::info!("ga solved epoch={epoch_number} population_size={population_size}");
                 return;
+            }
+
+            let is_improvement = epoch_best_conflicts_sum < best_conflicts_sum;
+            if is_improvement {
+                best_conflicts_sum = epoch_best_conflicts_sum;
+                log::info!(
+                    "ga improvement epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size}",
+                );
+                continue;
+            }
+
+            let is_periodic_log = epoch_number % progress_log_interval == 0;
+            let is_last_epoch = epoch_number == self.max_epoch_count;
+            if is_periodic_log || is_last_epoch {
+                log::info!(
+                    "ga progress epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size}",
+                );
             }
         }
 
-        log::warn!("no solution found")
+        log::warn!(
+            "no solution found best_conflicts_sum={best_conflicts_sum} epochs={} population_size={}",
+            self.max_epoch_count,
+            self.get_population_size(),
+        )
     }
 
     pub fn get_best_chromosome(&self) -> &Chromosome {
@@ -134,6 +165,10 @@ impl GeneticAlgorithm {
             .map(|chromosome| chromosome.get_fitness())
             .sum::<f32>();
 
+        if fitness_sum <= f32::EPSILON {
+            log::debug!("fitness sum is near zero; selecting parents uniformly at random");
+        }
+
         log::debug!(
             "select random chromosomes [mate_amount={mate_amount}, fitness_sum={fitness_sum}]",
         );
@@ -163,7 +198,6 @@ impl GeneticAlgorithm {
         }
 
         if fitness_sum <= f32::EPSILON {
-            log::debug!("fitness sum is near zero; selecting parent uniformly at random");
             return Some(self.rng.random_range(0..self.population.len()));
         }
 
@@ -185,7 +219,9 @@ impl GeneticAlgorithm {
         for (index, chromosome) in self.population.iter().enumerate() {
             selection_rank += chromosome.get_fitness();
             if selection_rank >= roulette_spin {
-                log::trace!("selecting chromosome: {chromosome:?}");
+                log::trace!(
+                    "selecting chromosome index={index} selection_rank={selection_rank} roulette_spin={roulette_spin}",
+                );
                 return Some(index);
             }
         }
@@ -284,8 +320,12 @@ fn normalize_unit_interval(value: f32, fallback: f32) -> f32 {
     }
 }
 
+fn epoch_progress_log_interval(max_epoch_count: u32) -> u32 {
+    (max_epoch_count / TARGET_EPOCH_PROGRESS_LOGS).max(1)
+}
+
 fn mate_chromosomes(parent_one: &[u16], parent_two: &[u16], rng: &mut impl Rng) -> Chromosome {
-    log::debug!("mate chromosomes");
+    log::trace!("mate chromosomes");
     log::trace!("parent_one={parent_one:?}");
     log::trace!("parent_two={parent_two:?}");
 
@@ -308,7 +348,7 @@ fn pmx(parent_one: &[u16], parent_two: &[u16], rng: &mut impl Rng) -> Vec<u16> {
     let point_one = rng.random_range(0..chromosome_half_size);
     let point_two = rng.random_range(chromosome_half_size..chromosome_size);
 
-    log::debug!("partially mapped crossover [point_one={point_one}, point_two={point_two}]");
+    log::trace!("partially mapped crossover [point_one={point_one}, point_two={point_two}]");
 
     let mut parent_two_positions = vec![usize::MAX; chromosome_size];
     for (index, &gene) in parent_two.iter().enumerate() {
@@ -324,7 +364,7 @@ fn pmx(parent_one: &[u16], parent_two: &[u16], rng: &mut impl Rng) -> Vec<u16> {
         child_used[usize::from(gene)] = true;
     }
 
-    log::debug!("child positions one: {child_genes:?}");
+    log::trace!("child positions one: {child_genes:?}");
 
     for (i, &gene) in parent_two
         .iter()
@@ -339,7 +379,7 @@ fn pmx(parent_one: &[u16], parent_two: &[u16], rng: &mut impl Rng) -> Vec<u16> {
         }
     }
 
-    log::debug!("child positions two: {child_genes:?}");
+    log::trace!("child positions two: {child_genes:?}");
 
     for i in 0..chromosome_size {
         if child_genes[i].is_none() {
@@ -347,7 +387,7 @@ fn pmx(parent_one: &[u16], parent_two: &[u16], rng: &mut impl Rng) -> Vec<u16> {
         }
     }
 
-    log::debug!("child positions three: {child_genes:?}");
+    log::trace!("child positions three: {child_genes:?}");
     child_genes
         .iter()
         .map(|gene| gene.expect("pmx child should not contain empty genes"))
