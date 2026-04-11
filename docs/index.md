@@ -32,6 +32,7 @@ cargo run --release -- -n 18 -p 40000 -e 5000 -s 42 -m 0.08 -r 0.10
 - `-m`, `--mutation-rate <0..1>`: probability of mutating each non-elite chromosome. Default: `0.08`.
 - `-r`, `--elite-ratio <0..1>`: fraction of top chromosomes retained before random survivor sampling. Default: `0.10`.
 - `--no-board`: skip board rendering output.
+- `--metrics-csv <path>`: write per-epoch run metrics to a CSV file (includes seed, elapsed ms, and best conflicts).
 
 If `--seed` is omitted, a random seed is generated and logged.
 

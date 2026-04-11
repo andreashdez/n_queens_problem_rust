@@ -1,3 +1,10 @@
+use std::{
+    fs::{self, File},
+    io::Write,
+    path::{Path, PathBuf},
+    process,
+};
+
 use clap::{ArgAction, Parser};
 use n_queens_problem::{ga, ui};
 use rand::Rng;
@@ -75,6 +82,73 @@ struct RunConfig {
         help = "Skip board rendering output"
     )]
     draw_board: bool,
+    #[arg(
+        long = "metrics-csv",
+        value_name = "PATH",
+        help = "Write per-epoch run metrics to CSV"
+    )]
+    metrics_csv: Option<PathBuf>,
+}
+
+fn write_run_metrics_csv(
+    metrics_path: &Path,
+    run_config: &RunConfig,
+    seed: u64,
+    run_metrics: &ga::RunMetrics,
+) -> Result<(), String> {
+    if let Some(parent) = metrics_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create metrics directory `{}`: {error}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let mut metrics_file = File::create(metrics_path).map_err(|error| {
+        format!(
+            "failed to create metrics file `{}`: {error}",
+            metrics_path.display()
+        )
+    })?;
+
+    writeln!(
+        metrics_file,
+        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,epoch,best_conflicts_sum,population_size,elapsed_ms"
+    )
+    .map_err(|error| {
+        format!(
+            "failed to write metrics header `{}`: {error}",
+            metrics_path.display()
+        )
+    })?;
+
+    for epoch_metrics in run_metrics.epochs() {
+        writeln!(
+            metrics_file,
+            "{seed},{},{},{},{},{},{},{},{},{}",
+            run_config.board_size,
+            run_config.population_size,
+            run_config.max_epochs,
+            run_config.mutation_rate,
+            run_config.elite_ratio,
+            epoch_metrics.epoch(),
+            epoch_metrics.best_conflicts_sum(),
+            epoch_metrics.population_size(),
+            epoch_metrics.elapsed_ms(),
+        )
+        .map_err(|error| {
+            format!(
+                "failed to write metrics row `{}`: {error}",
+                metrics_path.display()
+            )
+        })?;
+    }
+
+    Ok(())
 }
 
 fn parse_positive_usize(raw_value: &str) -> Result<usize, String> {
@@ -144,7 +218,17 @@ fn main() {
     );
 
     log::info!("done building genetic algorithm");
-    genetic_algorithm.run_algorithm();
+    let run_metrics = genetic_algorithm.run_algorithm();
+
+    if let Some(metrics_path) = run_config.metrics_csv.as_deref() {
+        write_run_metrics_csv(metrics_path, &run_config, seed, &run_metrics).unwrap_or_else(
+            |error| {
+                eprintln!("{error}");
+                process::exit(2);
+            },
+        );
+        println!("Metrics written to {}", metrics_path.display());
+    }
 
     let best_chromosome = genetic_algorithm.get_best_chromosome();
     let worst_chromosome = genetic_algorithm.get_worst_chromosome();
@@ -155,6 +239,10 @@ fn main() {
     println!("Best  = {best_chromosome:?}");
     println!("Worst = {worst_chromosome:?}");
     println!("Final Population: {population_size}");
+    println!("Elapsed (ms): {}", run_metrics.total_elapsed_ms());
+    if let Some(solved_epoch) = run_metrics.solved_epoch() {
+        println!("Solved Epoch: {solved_epoch}");
+    }
 
     if !run_config.draw_board {
         println!("Board rendering disabled (--no-board).");

@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
 use self::chromosome::Chromosome;
@@ -9,6 +11,76 @@ const MAX_TO_MATE: usize = 50;
 const TARGET_EPOCH_PROGRESS_LOGS: u32 = 20;
 pub const DEFAULT_MUTATION_RATE: f32 = 0.08;
 pub const DEFAULT_ELITE_RATIO: f32 = 0.10;
+
+#[derive(Debug, Clone)]
+pub struct EpochMetrics {
+    epoch: u32,
+    best_conflicts_sum: u32,
+    population_size: usize,
+    elapsed_ms: u128,
+}
+
+impl EpochMetrics {
+    pub fn epoch(&self) -> u32 {
+        self.epoch
+    }
+
+    pub fn best_conflicts_sum(&self) -> u32 {
+        self.best_conflicts_sum
+    }
+
+    pub fn population_size(&self) -> usize {
+        self.population_size
+    }
+
+    pub fn elapsed_ms(&self) -> u128 {
+        self.elapsed_ms
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RunMetrics {
+    epochs: Vec<EpochMetrics>,
+    solved_epoch: Option<u32>,
+    total_elapsed_ms: u128,
+}
+
+impl RunMetrics {
+    pub fn epochs(&self) -> &[EpochMetrics] {
+        &self.epochs
+    }
+
+    pub fn solved_epoch(&self) -> Option<u32> {
+        self.solved_epoch
+    }
+
+    pub fn total_elapsed_ms(&self) -> u128 {
+        self.total_elapsed_ms
+    }
+
+    fn record_epoch(
+        &mut self,
+        epoch: u32,
+        best_conflicts_sum: u32,
+        population_size: usize,
+        elapsed_ms: u128,
+    ) {
+        self.epochs.push(EpochMetrics {
+            epoch,
+            best_conflicts_sum,
+            population_size,
+            elapsed_ms,
+        });
+    }
+
+    fn mark_solved(&mut self, solved_epoch: u32) {
+        self.solved_epoch = Some(solved_epoch);
+    }
+
+    fn set_total_elapsed_ms(&mut self, total_elapsed_ms: u128) {
+        self.total_elapsed_ms = total_elapsed_ms;
+    }
+}
 
 pub struct GeneticAlgorithm {
     population: Vec<Chromosome>,
@@ -42,17 +114,30 @@ impl GeneticAlgorithm {
         self.population.len()
     }
 
-    pub fn run_algorithm(&mut self) {
+    pub fn run_algorithm(&mut self) -> RunMetrics {
+        let started_at = Instant::now();
+        let mut run_metrics = RunMetrics::default();
+
         if self.population.is_empty() {
             log::warn!("cannot run algorithm with empty population");
-            return;
+            run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
+            return run_metrics;
         }
 
         self.calc_fitness();
         let mut best_conflicts_sum = self.get_best_chromosome().get_conflicts_sum();
+        run_metrics.record_epoch(
+            0,
+            best_conflicts_sum,
+            self.get_population_size(),
+            started_at.elapsed().as_millis(),
+        );
+
         if best_conflicts_sum == 0 {
             log::info!("ga solved in initial population");
-            return;
+            run_metrics.mark_solved(0);
+            run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
+            return run_metrics;
         }
 
         let progress_log_interval = epoch_progress_log_interval(self.max_epoch_count);
@@ -73,9 +158,18 @@ impl GeneticAlgorithm {
             let population_size = self.get_population_size();
             let epoch_number = epoch + 1;
 
+            run_metrics.record_epoch(
+                epoch_number,
+                epoch_best_conflicts_sum,
+                population_size,
+                started_at.elapsed().as_millis(),
+            );
+
             if epoch_best_conflicts_sum == 0 {
                 log::info!("ga solved epoch={epoch_number} population_size={population_size}");
-                return;
+                run_metrics.mark_solved(epoch_number);
+                run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
+                return run_metrics;
             }
 
             let is_improvement = epoch_best_conflicts_sum < best_conflicts_sum;
@@ -100,7 +194,10 @@ impl GeneticAlgorithm {
             "no solution found best_conflicts_sum={best_conflicts_sum} epochs={} population_size={}",
             self.max_epoch_count,
             self.get_population_size(),
-        )
+        );
+
+        run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
+        run_metrics
     }
 
     pub fn get_best_chromosome(&self) -> &Chromosome {
@@ -501,6 +598,27 @@ mod tests {
             build_genetic_algorithm(1, 8, 10, 42, DEFAULT_MUTATION_RATE, DEFAULT_ELITE_RATIO);
         one_board.run_algorithm();
         assert_eq!(one_board.get_best_chromosome().get_conflicts_sum(), 0);
+    }
+
+    #[test]
+    fn test_run_metrics_include_initial_epoch_and_elapsed_time() {
+        let mut genetic_algorithm =
+            build_genetic_algorithm(8, 32, 5, 42, DEFAULT_MUTATION_RATE, DEFAULT_ELITE_RATIO);
+
+        let run_metrics = genetic_algorithm.run_algorithm();
+        assert!(!run_metrics.epochs().is_empty());
+        assert_eq!(run_metrics.epochs()[0].epoch(), 0);
+        assert!(run_metrics.total_elapsed_ms() >= run_metrics.epochs()[0].elapsed_ms());
+    }
+
+    #[test]
+    fn test_run_metrics_mark_initial_solve_epoch() {
+        let mut genetic_algorithm =
+            build_genetic_algorithm(0, 8, 10, 42, DEFAULT_MUTATION_RATE, DEFAULT_ELITE_RATIO);
+
+        let run_metrics = genetic_algorithm.run_algorithm();
+        assert_eq!(run_metrics.solved_epoch(), Some(0));
+        assert_eq!(run_metrics.epochs()[0].best_conflicts_sum(), 0);
     }
 
     #[test]
