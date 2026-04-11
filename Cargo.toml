@@ -8,3 +8,11 @@ rand = "0.9"
 log = "0.4"
 simple_logger = "5.0"
 clap = { version = "4.5", features = ["derive"] }
+
+[dev-dependencies]
+criterion = "0.5"
+proptest = "1.6"
+
+[[bench]]
+name = "ga"
+harness = false

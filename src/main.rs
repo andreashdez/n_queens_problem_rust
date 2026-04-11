@@ -1,9 +1,7 @@
 use clap::{ArgAction, Parser};
+use n_queens_problem::{ga, ui};
 use rand::Rng;
 use simple_logger::SimpleLogger;
-
-pub mod ga;
-pub mod ui;
 
 const DEFAULT_BOARD_SIZE: u16 = 18;
 const DEFAULT_POPULATION_SIZE: usize = 40_000;

@@ -424,6 +424,7 @@ fn find_position(
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
     use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 
     use super::{
@@ -441,6 +442,14 @@ mod tests {
             DEFAULT_MUTATION_RATE,
             DEFAULT_ELITE_RATIO,
         )
+    }
+
+    fn shuffled_values(size: usize, seed: u64) -> Vec<u16> {
+        let mut values =
+            (0..u16::try_from(size).expect("size should fit into u16")).collect::<Vec<_>>();
+        let mut rng = StdRng::seed_from_u64(seed);
+        values.shuffle(&mut rng);
+        values
     }
 
     #[test]
@@ -511,6 +520,32 @@ mod tests {
 
             assert_eq!(child.len(), 16);
             assert_eq!(child_sorted, expected_values);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn prop_pmx_preserves_permutation_invariant(
+            size in 2usize..64,
+            parent_one_seed in any::<u64>(),
+            parent_two_seed in any::<u64>(),
+            crossover_seed in any::<u64>(),
+        ) {
+            let parent_one = shuffled_values(size, parent_one_seed);
+            let parent_two = shuffled_values(size, parent_two_seed);
+            let mut crossover_rng = StdRng::seed_from_u64(crossover_seed);
+
+            let child = pmx(&parent_one, &parent_two, &mut crossover_rng);
+
+            prop_assert_eq!(child.len(), size);
+
+            let mut child_sorted = child.clone();
+            child_sorted.sort_unstable();
+            let expected_values =
+                (0..u16::try_from(size).expect("size should fit into u16")).collect::<Vec<_>>();
+            prop_assert_eq!(child_sorted, expected_values);
         }
     }
 }

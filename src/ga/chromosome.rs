@@ -138,6 +138,7 @@ fn count_conflicts_pairwise(positions: &[u16]) -> Vec<u32> {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
     use rand::{SeedableRng, rngs::StdRng};
 
     use crate::ga::chromosome::{Chromosome, generate_distinct_random_values};
@@ -207,5 +208,31 @@ mod tests {
         let optimized_conflicts = super::count_conflicts(&positions);
         let pairwise_conflicts = super::count_conflicts_pairwise(&positions);
         assert_eq!(optimized_conflicts, pairwise_conflicts);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn prop_mutate_swap_keeps_permutation_invariant(
+            size in 0usize..64,
+            initial_seed in any::<u64>(),
+            mutation_seed in any::<u64>(),
+        ) {
+            let size_u16 = u16::try_from(size).expect("size should fit into u16");
+            let mut initial_rng = StdRng::seed_from_u64(initial_seed);
+            let positions =
+                super::generate_distinct_random_values_with_rng(size_u16, &mut initial_rng);
+
+            let mut chromosome = Chromosome::new(positions);
+            let mut mutation_rng = StdRng::seed_from_u64(mutation_seed);
+            chromosome.mutate_swap(&mut mutation_rng);
+
+            let mut mutated_positions = chromosome.get_positions().to_vec();
+            mutated_positions.sort_unstable();
+            let expected_positions = (0..size_u16).collect::<Vec<_>>();
+
+            prop_assert_eq!(mutated_positions, expected_positions);
+        }
     }
 }

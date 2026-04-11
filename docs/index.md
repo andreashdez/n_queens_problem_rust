@@ -41,6 +41,7 @@ If `--seed` is omitted, a random seed is generated and logged.
 cargo fmt --check
 cargo clippy --all-targets --all-features
 cargo test
+cargo bench --bench ga
 ```
 
 ## Example board output (8x8)
