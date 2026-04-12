@@ -50,11 +50,18 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          if git diff --quiet -- Home.md; then
+          WIKI_BRANCH="$(git symbolic-ref --short -q HEAD || true)"
+          if [ -z "$WIKI_BRANCH" ]; then
+            WIKI_BRANCH="master"
+            git checkout -B "$WIKI_BRANCH"
+          fi
+
+          git add Home.md
+
+          if git diff --cached --quiet -- Home.md; then
             echo "Wiki Home is already up to date."
             exit 0
           fi
 
-          git add Home.md
           git commit -m "docs: sync wiki home from docs/index.md"
-          git push
+          git push origin "HEAD:${WIKI_BRANCH}"
