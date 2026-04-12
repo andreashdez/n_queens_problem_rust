@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use rand::{Rng, SeedableRng, rngs::StdRng};
+use rayon::prelude::*;
 
 use self::chromosome::Chromosome;
 
@@ -255,20 +256,21 @@ impl GeneticAlgorithm {
 
         if diff_conflicts.abs() <= f32::EPSILON {
             log::debug!("all chromosomes have equal conflicts; assigning uniform fitness");
-            for chromosome in &mut self.population {
+            self.population.par_iter_mut().for_each(|chromosome| {
                 chromosome.set_fitness(1.0);
-            }
+            });
             return;
         }
 
-        for chromosome in &mut self.population {
+        let diff_conflicts_pow3 = diff_conflicts.powi(3);
+        self.population.par_iter_mut().for_each(|chromosome| {
             let conflicts_sum = chromosome.get_conflicts_sum() as f32;
-            let fitness = (most_conflicts - conflicts_sum).powi(3) / diff_conflicts.powi(3);
+            let fitness = (most_conflicts - conflicts_sum).powi(3) / diff_conflicts_pow3;
             chromosome.set_fitness(fitness);
             log::trace!(
                 "calculating fitness for chromosome [conflicts={conflicts_sum}, fitness={fitness}]",
             );
-        }
+        });
     }
 
     fn mate_random_chromosomes(&mut self, min_to_mate: usize, max_to_mate: usize) {
@@ -364,16 +366,38 @@ impl GeneticAlgorithm {
             .min_by_key(|(_, chromosome)| chromosome.get_conflicts_sum())
             .map(|(index, _)| index);
 
+        let mut planned_swaps = vec![None; self.population.len()];
         let rng = &mut self.rng;
-        for (index, chromosome) in self.population.iter_mut().enumerate() {
+
+        for (index, chromosome) in self.population.iter().enumerate() {
             if Some(index) == best_index {
                 continue;
             }
 
             if rng.random::<f32>() < mutation_rate {
-                chromosome.mutate_swap(rng);
+                let chromosome_size = chromosome.get_positions().len();
+                if chromosome_size < 2 {
+                    continue;
+                }
+
+                let index_one = rng.random_range(0..chromosome_size);
+                let mut index_two = rng.random_range(0..(chromosome_size - 1));
+                if index_two >= index_one {
+                    index_two += 1;
+                }
+
+                planned_swaps[index] = Some((index_one, index_two));
             }
         }
+
+        self.population
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(index, chromosome)| {
+                if let Some((index_one, index_two)) = planned_swaps[index] {
+                    chromosome.mutate_swap_at(index_one, index_two);
+                }
+            });
     }
 
     fn select_survivors(&mut self) {
@@ -381,14 +405,19 @@ impl GeneticAlgorithm {
             return;
         }
 
-        self.population
-            .sort_by_key(|chromosome| chromosome.get_conflicts_sum());
-
         let elite_count =
             ((self.target_population_size as f32) * self.elite_ratio).round() as usize;
         let elite_count = elite_count
             .min(self.target_population_size)
             .min(self.population.len());
+
+        if elite_count > 0 {
+            let nth_elite_index = elite_count - 1;
+            self.population
+                .select_nth_unstable_by_key(nth_elite_index, |chromosome| {
+                    chromosome.get_conflicts_sum()
+                });
+        }
 
         let mut survivors = self.population.drain(..elite_count).collect::<Vec<_>>();
 

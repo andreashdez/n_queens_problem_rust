@@ -32,6 +32,18 @@ impl Chromosome {
             index_two += 1;
         }
 
+        self.mutate_swap_at(index_one, index_two);
+    }
+
+    pub(crate) fn mutate_swap_at(&mut self, index_one: usize, index_two: usize) {
+        if self.positions.len() < 2 || index_one == index_two {
+            return;
+        }
+
+        if index_one >= self.positions.len() || index_two >= self.positions.len() {
+            return;
+        }
+
         self.positions.swap(index_one, index_two);
         self.recalculate_conflicts();
     }
