@@ -14,6 +14,10 @@ const TARGET_STAGNATION_RESETS: u32 = 20;
 const MIN_STAGNATION_RESET_EPOCHS: u32 = 50;
 const MAX_STAGNATION_RESET_EPOCHS: u32 = 500;
 const SOFT_RESTART_ELITE_RATIO_SCALE: f32 = 0.4;
+const MUTATION_STAGNATION_BOOST_SCALE: f32 = 3.0;
+const MAX_ADAPTIVE_MUTATION_RATE: f32 = 0.60;
+const MIN_ADAPTIVE_ELITE_RATIO: f32 = 0.01;
+const MIN_ADAPTIVE_ELITE_RATIO_SCALE: f32 = 0.25;
 pub const DEFAULT_MUTATION_RATE: f32 = 0.08;
 pub const DEFAULT_ELITE_RATIO: f32 = 0.10;
 
@@ -149,34 +153,49 @@ impl GeneticAlgorithm {
         let stagnation_reset_interval = stagnation_reset_interval(self.max_epoch_count);
         let mut stagnation_epochs = 0;
         log::info!(
-            "running ga epochs={} population_size={} progress_log_interval={} stagnation_reset_interval={} initial_best_conflicts_sum={best_conflicts_sum}",
+            "running ga epochs={} population_size={} progress_log_interval={} stagnation_reset_interval={} initial_best_conflicts_sum={best_conflicts_sum} base_mutation_rate={} base_elite_ratio={}",
             self.max_epoch_count,
             self.get_population_size(),
             progress_log_interval,
             stagnation_reset_interval,
+            self.mutation_rate,
+            self.elite_ratio,
         );
 
         for epoch in 0..self.max_epoch_count {
             let epoch_number = epoch + 1;
 
             if stagnation_epochs >= stagnation_reset_interval {
-                let replaced_count = self.soft_restart_population();
+                let (_, reset_elite_ratio) = adaptive_ga_parameters(
+                    self.mutation_rate,
+                    self.elite_ratio,
+                    stagnation_epochs,
+                    stagnation_reset_interval,
+                );
+                let replaced_count = self.soft_restart_population(reset_elite_ratio);
                 self.calc_fitness();
 
                 let post_reset_best_conflicts_sum = self.get_best_chromosome().get_conflicts_sum();
                 best_conflicts_sum = best_conflicts_sum.min(post_reset_best_conflicts_sum);
 
                 log::info!(
-                    "ga stagnation reset epoch={epoch_number} stagnant_epochs={stagnation_epochs} replaced={replaced_count} best_conflicts_sum={post_reset_best_conflicts_sum} population_size={}",
+                    "ga stagnation reset epoch={epoch_number} stagnant_epochs={stagnation_epochs} replaced={replaced_count} best_conflicts_sum={post_reset_best_conflicts_sum} elite_ratio={reset_elite_ratio:.4} population_size={}",
                     self.get_population_size(),
                 );
 
                 stagnation_epochs = 0;
             }
 
+            let (epoch_mutation_rate, epoch_elite_ratio) = adaptive_ga_parameters(
+                self.mutation_rate,
+                self.elite_ratio,
+                stagnation_epochs,
+                stagnation_reset_interval,
+            );
+
             self.mate_random_chromosomes(MIN_TO_MATE, MAX_TO_MATE);
-            self.mutate_population(self.mutation_rate);
-            self.select_survivors();
+            self.mutate_population(epoch_mutation_rate);
+            self.select_survivors(epoch_elite_ratio);
             self.calc_fitness();
 
             let epoch_best_conflicts_sum = self.get_best_chromosome().get_conflicts_sum();
@@ -190,7 +209,9 @@ impl GeneticAlgorithm {
             );
 
             if epoch_best_conflicts_sum == 0 {
-                log::info!("ga solved epoch={epoch_number} population_size={population_size}");
+                log::info!(
+                    "ga solved epoch={epoch_number} population_size={population_size} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4}"
+                );
                 run_metrics.mark_solved(epoch_number);
                 run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
                 return run_metrics;
@@ -201,7 +222,7 @@ impl GeneticAlgorithm {
                 best_conflicts_sum = epoch_best_conflicts_sum;
                 stagnation_epochs = 0;
                 log::info!(
-                    "ga improvement epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size}",
+                    "ga improvement epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4}",
                 );
                 continue;
             }
@@ -212,7 +233,7 @@ impl GeneticAlgorithm {
             let is_last_epoch = epoch_number == self.max_epoch_count;
             if is_periodic_log || is_last_epoch {
                 log::info!(
-                    "ga progress epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} stagnant_epochs={stagnation_epochs}",
+                    "ga progress epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} stagnant_epochs={stagnation_epochs} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4}",
                 );
             }
         }
@@ -400,13 +421,14 @@ impl GeneticAlgorithm {
             });
     }
 
-    fn select_survivors(&mut self) {
+    fn select_survivors(&mut self, elite_ratio: f32) {
         if self.population.len() <= self.target_population_size {
             return;
         }
 
-        let elite_count =
-            ((self.target_population_size as f32) * self.elite_ratio).round() as usize;
+        let elite_ratio = normalize_unit_interval(elite_ratio, self.elite_ratio);
+
+        let elite_count = ((self.target_population_size as f32) * elite_ratio).round() as usize;
         let elite_count = elite_count
             .min(self.target_population_size)
             .min(self.population.len());
@@ -433,10 +455,12 @@ impl GeneticAlgorithm {
         self.population = survivors;
     }
 
-    fn soft_restart_population(&mut self) -> usize {
+    fn soft_restart_population(&mut self, elite_ratio: f32) -> usize {
         if self.population.is_empty() {
             return 0;
         }
+
+        let elite_ratio = normalize_unit_interval(elite_ratio, self.elite_ratio);
 
         self.population
             .sort_by_key(|chromosome| chromosome.get_conflicts_sum());
@@ -448,10 +472,9 @@ impl GeneticAlgorithm {
             .unwrap_or(0);
         let board_size = u16::try_from(board_size).expect("board size should fit into u16");
 
-        let mut elite_count = ((self.target_population_size as f32)
-            * self.elite_ratio
-            * SOFT_RESTART_ELITE_RATIO_SCALE)
-            .round() as usize;
+        let mut elite_count =
+            ((self.target_population_size as f32) * elite_ratio * SOFT_RESTART_ELITE_RATIO_SCALE)
+                .round() as usize;
         elite_count = elite_count
             .max(1)
             .min(self.target_population_size)
@@ -511,6 +534,31 @@ fn normalize_unit_interval(value: f32, fallback: f32) -> f32 {
     } else {
         fallback
     }
+}
+
+fn adaptive_ga_parameters(
+    base_mutation_rate: f32,
+    base_elite_ratio: f32,
+    stagnation_epochs: u32,
+    stagnation_reset_interval: u32,
+) -> (f32, f32) {
+    let stagnation_ratio = if stagnation_reset_interval == 0 {
+        0.0
+    } else {
+        (stagnation_epochs as f32 / stagnation_reset_interval as f32).clamp(0.0, 1.0)
+    };
+
+    let mutation_ceiling = MAX_ADAPTIVE_MUTATION_RATE.max(base_mutation_rate);
+    let adaptive_mutation_rate = (base_mutation_rate
+        * (1.0 + MUTATION_STAGNATION_BOOST_SCALE * stagnation_ratio))
+        .clamp(0.0, mutation_ceiling);
+
+    let adaptive_elite_scale = 1.0 - ((1.0 - MIN_ADAPTIVE_ELITE_RATIO_SCALE) * stagnation_ratio);
+    let min_elite_ratio = base_elite_ratio.min(MIN_ADAPTIVE_ELITE_RATIO);
+    let adaptive_elite_ratio =
+        (base_elite_ratio * adaptive_elite_scale).clamp(min_elite_ratio, 1.0);
+
+    (adaptive_mutation_rate, adaptive_elite_ratio)
 }
 
 fn epoch_progress_log_interval(max_epoch_count: u32) -> u32 {
@@ -730,6 +778,26 @@ mod tests {
     }
 
     #[test]
+    fn test_adaptive_ga_parameters_follow_stagnation() {
+        let stagnation_reset_interval = 200;
+
+        let (mutation_fresh, elite_fresh) =
+            super::adaptive_ga_parameters(0.08, 0.10, 0, stagnation_reset_interval);
+        let (mutation_mid, elite_mid) =
+            super::adaptive_ga_parameters(0.08, 0.10, 100, stagnation_reset_interval);
+        let (mutation_stale, elite_stale) =
+            super::adaptive_ga_parameters(0.08, 0.10, 200, stagnation_reset_interval);
+
+        assert_eq!(mutation_fresh, 0.08);
+        assert_eq!(elite_fresh, 0.10);
+        assert!(mutation_mid > mutation_fresh);
+        assert!(mutation_stale > mutation_mid);
+        assert!(elite_mid < elite_fresh);
+        assert!(elite_stale < elite_mid);
+        assert!(elite_stale >= super::MIN_ADAPTIVE_ELITE_RATIO);
+    }
+
+    #[test]
     fn test_soft_restart_keeps_best_chromosome_and_refills_population() {
         let solution = vec![0, 4, 7, 5, 2, 6, 1, 3];
         let non_solution = vec![0, 1, 2, 3, 4, 5, 6, 7];
@@ -746,7 +814,7 @@ mod tests {
             DEFAULT_ELITE_RATIO,
         );
 
-        let replaced_count = genetic_algorithm.soft_restart_population();
+        let replaced_count = genetic_algorithm.soft_restart_population(DEFAULT_ELITE_RATIO);
 
         assert_eq!(replaced_count, 9);
         assert_eq!(genetic_algorithm.get_population_size(), 10);
@@ -771,7 +839,7 @@ mod tests {
             1.0,
         );
 
-        let replaced_count = genetic_algorithm.soft_restart_population();
+        let replaced_count = genetic_algorithm.soft_restart_population(1.0);
 
         assert!(replaced_count >= 1);
         assert_eq!(genetic_algorithm.get_population_size(), 4);
