@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use rand::{rngs::StdRng, Rng, RngExt, SeedableRng};
+use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
 use rayon::prelude::*;
 
 use self::chromosome::Chromosome;
@@ -697,11 +697,11 @@ fn find_position(
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
-    use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 
     use super::{
-        build_genetic_algorithm, chromosome::Chromosome, pmx, GaConfig, GeneticAlgorithm,
-        DEFAULT_ELITE_RATIO, DEFAULT_MUTATION_RATE,
+        DEFAULT_ELITE_RATIO, DEFAULT_MUTATION_RATE, GaConfig, GeneticAlgorithm,
+        build_genetic_algorithm, chromosome::Chromosome, pmx,
     };
 
     fn build_test_algorithm(population: Vec<Chromosome>) -> GeneticAlgorithm {
