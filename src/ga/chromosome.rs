@@ -1,4 +1,4 @@
-use rand::{Rng, seq::SliceRandom};
+use rand::{seq::SliceRandom, Rng, RngExt};
 
 #[derive(Debug)]
 pub struct Chromosome {
@@ -151,9 +151,9 @@ fn count_conflicts_pairwise(positions: &[u16]) -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
-    use rand::{SeedableRng, rngs::StdRng};
+    use rand::{rngs::StdRng, SeedableRng};
 
-    use crate::ga::chromosome::{Chromosome, generate_distinct_random_values};
+    use crate::ga::chromosome::{generate_distinct_random_values, Chromosome};
 
     #[test]
     fn test_initial_values_generator() {

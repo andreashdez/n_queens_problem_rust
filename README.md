@@ -33,6 +33,27 @@ cargo run --release -- -n 18 -p 40000 -e 5000 -s 42 -m 0.08 -r 0.10
 
 If `--seed` is omitted, a random seed is generated and logged.
 
+## Library usage
+
+```rust
+use n_queens_problem::ga::{self, GaConfig};
+
+fn main() {
+    let config = GaConfig::new(18, 40_000, 5_000, 42)
+        .with_mutation_rate(0.08)
+        .with_elite_ratio(0.10);
+
+    let mut algorithm = ga::build_genetic_algorithm(config);
+    let metrics = algorithm.run_algorithm();
+
+    println!(
+        "best conflicts: {}",
+        algorithm.get_best_chromosome().get_conflicts_sum()
+    );
+    println!("solved epoch: {:?}", metrics.solved_epoch());
+}
+```
+
 ## Development checks
 
 ```bash

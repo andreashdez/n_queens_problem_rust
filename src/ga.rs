@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{rngs::StdRng, Rng, RngExt, SeedableRng};
 use rayon::prelude::*;
 
 use self::chromosome::Chromosome;
@@ -88,6 +88,39 @@ impl RunMetrics {
 
     fn set_total_elapsed_ms(&mut self, total_elapsed_ms: u128) {
         self.total_elapsed_ms = total_elapsed_ms;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct GaConfig {
+    pub size: u16,
+    pub initial_population: usize,
+    pub max_epoch_count: u32,
+    pub seed: u64,
+    pub mutation_rate: f32,
+    pub elite_ratio: f32,
+}
+
+impl GaConfig {
+    pub fn new(size: u16, initial_population: usize, max_epoch_count: u32, seed: u64) -> Self {
+        Self {
+            size,
+            initial_population,
+            max_epoch_count,
+            seed,
+            mutation_rate: DEFAULT_MUTATION_RATE,
+            elite_ratio: DEFAULT_ELITE_RATIO,
+        }
+    }
+
+    pub fn with_mutation_rate(mut self, mutation_rate: f32) -> Self {
+        self.mutation_rate = mutation_rate;
+        self
+    }
+
+    pub fn with_elite_ratio(mut self, elite_ratio: f32) -> Self {
+        self.elite_ratio = elite_ratio;
+        self
     }
 }
 
@@ -498,22 +531,15 @@ impl GeneticAlgorithm {
     }
 }
 
-pub fn build_genetic_algorithm(
-    size: u16,
-    initial_population: usize,
-    max_epoch_count: u32,
-    seed: u64,
-    mutation_rate: f32,
-    elite_ratio: f32,
-) -> GeneticAlgorithm {
-    let target_population_size = initial_population.max(1);
-    let mutation_rate = normalize_unit_interval(mutation_rate, DEFAULT_MUTATION_RATE);
-    let elite_ratio = normalize_unit_interval(elite_ratio, DEFAULT_ELITE_RATIO);
-    let mut rng = StdRng::seed_from_u64(seed);
+pub fn build_genetic_algorithm(config: GaConfig) -> GeneticAlgorithm {
+    let target_population_size = config.initial_population.max(1);
+    let mutation_rate = normalize_unit_interval(config.mutation_rate, DEFAULT_MUTATION_RATE);
+    let elite_ratio = normalize_unit_interval(config.elite_ratio, DEFAULT_ELITE_RATIO);
+    let mut rng = StdRng::seed_from_u64(config.seed);
     let mut population: Vec<Chromosome> = Vec::with_capacity(target_population_size);
 
     for _ in 0..target_population_size {
-        let positions = chromosome::generate_distinct_random_values_with_rng(size, &mut rng);
+        let positions = chromosome::generate_distinct_random_values_with_rng(config.size, &mut rng);
         let chromosome = Chromosome::new(positions);
         population.push(chromosome);
     }
@@ -521,7 +547,7 @@ pub fn build_genetic_algorithm(
     GeneticAlgorithm::new(
         population,
         target_population_size,
-        max_epoch_count,
+        config.max_epoch_count,
         rng,
         mutation_rate,
         elite_ratio,
@@ -671,11 +697,11 @@ fn find_position(
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
-    use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
+    use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 
     use super::{
-        DEFAULT_ELITE_RATIO, DEFAULT_MUTATION_RATE, GeneticAlgorithm, build_genetic_algorithm,
-        chromosome::Chromosome, pmx,
+        build_genetic_algorithm, chromosome::Chromosome, pmx, GaConfig, GeneticAlgorithm,
+        DEFAULT_ELITE_RATIO, DEFAULT_MUTATION_RATE,
     };
 
     fn build_test_algorithm(population: Vec<Chromosome>) -> GeneticAlgorithm {
@@ -738,21 +764,30 @@ mod tests {
 
     #[test]
     fn test_build_algorithm_handles_n_zero_and_one() {
-        let mut zero_board =
-            build_genetic_algorithm(0, 8, 10, 42, DEFAULT_MUTATION_RATE, DEFAULT_ELITE_RATIO);
+        let mut zero_board = build_genetic_algorithm(
+            GaConfig::new(0, 8, 10, 42)
+                .with_mutation_rate(DEFAULT_MUTATION_RATE)
+                .with_elite_ratio(DEFAULT_ELITE_RATIO),
+        );
         zero_board.run_algorithm();
         assert_eq!(zero_board.get_best_chromosome().get_conflicts_sum(), 0);
 
-        let mut one_board =
-            build_genetic_algorithm(1, 8, 10, 42, DEFAULT_MUTATION_RATE, DEFAULT_ELITE_RATIO);
+        let mut one_board = build_genetic_algorithm(
+            GaConfig::new(1, 8, 10, 42)
+                .with_mutation_rate(DEFAULT_MUTATION_RATE)
+                .with_elite_ratio(DEFAULT_ELITE_RATIO),
+        );
         one_board.run_algorithm();
         assert_eq!(one_board.get_best_chromosome().get_conflicts_sum(), 0);
     }
 
     #[test]
     fn test_run_metrics_include_initial_epoch_and_elapsed_time() {
-        let mut genetic_algorithm =
-            build_genetic_algorithm(8, 32, 5, 42, DEFAULT_MUTATION_RATE, DEFAULT_ELITE_RATIO);
+        let mut genetic_algorithm = build_genetic_algorithm(
+            GaConfig::new(8, 32, 5, 42)
+                .with_mutation_rate(DEFAULT_MUTATION_RATE)
+                .with_elite_ratio(DEFAULT_ELITE_RATIO),
+        );
 
         let run_metrics = genetic_algorithm.run_algorithm();
         assert!(!run_metrics.epochs().is_empty());
@@ -762,8 +797,11 @@ mod tests {
 
     #[test]
     fn test_run_metrics_mark_initial_solve_epoch() {
-        let mut genetic_algorithm =
-            build_genetic_algorithm(0, 8, 10, 42, DEFAULT_MUTATION_RATE, DEFAULT_ELITE_RATIO);
+        let mut genetic_algorithm = build_genetic_algorithm(
+            GaConfig::new(0, 8, 10, 42)
+                .with_mutation_rate(DEFAULT_MUTATION_RATE)
+                .with_elite_ratio(DEFAULT_ELITE_RATIO),
+        );
 
         let run_metrics = genetic_algorithm.run_algorithm();
         assert_eq!(run_metrics.solved_epoch(), Some(0));

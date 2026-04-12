@@ -7,7 +7,7 @@ use std::{
 
 use clap::{ArgAction, Parser};
 use n_queens_problem::{ga, ui};
-use rand::Rng;
+use rand::RngExt;
 use simple_logger::SimpleLogger;
 
 const DEFAULT_BOARD_SIZE: u16 = 18;
@@ -208,14 +208,16 @@ fn main() {
         run_config.draw_board,
     );
 
-    let mut genetic_algorithm = ga::build_genetic_algorithm(
+    let ga_config = ga::GaConfig::new(
         run_config.board_size,
         run_config.population_size,
         run_config.max_epochs,
         seed,
-        run_config.mutation_rate,
-        run_config.elite_ratio,
-    );
+    )
+    .with_mutation_rate(run_config.mutation_rate)
+    .with_elite_ratio(run_config.elite_ratio);
+
+    let mut genetic_algorithm = ga::build_genetic_algorithm(ga_config);
 
     log::info!("done building genetic algorithm");
     let run_metrics = genetic_algorithm.run_algorithm();
