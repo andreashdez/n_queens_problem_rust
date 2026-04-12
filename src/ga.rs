@@ -9,6 +9,10 @@ pub mod chromosome;
 const MIN_TO_MATE: usize = 10;
 const MAX_TO_MATE: usize = 50;
 const TARGET_EPOCH_PROGRESS_LOGS: u32 = 20;
+const TARGET_STAGNATION_RESETS: u32 = 20;
+const MIN_STAGNATION_RESET_EPOCHS: u32 = 50;
+const MAX_STAGNATION_RESET_EPOCHS: u32 = 500;
+const SOFT_RESTART_ELITE_RATIO_SCALE: f32 = 0.4;
 pub const DEFAULT_MUTATION_RATE: f32 = 0.08;
 pub const DEFAULT_ELITE_RATIO: f32 = 0.10;
 
@@ -141,14 +145,34 @@ impl GeneticAlgorithm {
         }
 
         let progress_log_interval = epoch_progress_log_interval(self.max_epoch_count);
+        let stagnation_reset_interval = stagnation_reset_interval(self.max_epoch_count);
+        let mut stagnation_epochs = 0;
         log::info!(
-            "running ga epochs={} population_size={} progress_log_interval={} initial_best_conflicts_sum={best_conflicts_sum}",
+            "running ga epochs={} population_size={} progress_log_interval={} stagnation_reset_interval={} initial_best_conflicts_sum={best_conflicts_sum}",
             self.max_epoch_count,
             self.get_population_size(),
             progress_log_interval,
+            stagnation_reset_interval,
         );
 
         for epoch in 0..self.max_epoch_count {
+            let epoch_number = epoch + 1;
+
+            if stagnation_epochs >= stagnation_reset_interval {
+                let replaced_count = self.soft_restart_population();
+                self.calc_fitness();
+
+                let post_reset_best_conflicts_sum = self.get_best_chromosome().get_conflicts_sum();
+                best_conflicts_sum = best_conflicts_sum.min(post_reset_best_conflicts_sum);
+
+                log::info!(
+                    "ga stagnation reset epoch={epoch_number} stagnant_epochs={stagnation_epochs} replaced={replaced_count} best_conflicts_sum={post_reset_best_conflicts_sum} population_size={}",
+                    self.get_population_size(),
+                );
+
+                stagnation_epochs = 0;
+            }
+
             self.mate_random_chromosomes(MIN_TO_MATE, MAX_TO_MATE);
             self.mutate_population(self.mutation_rate);
             self.select_survivors();
@@ -156,7 +180,6 @@ impl GeneticAlgorithm {
 
             let epoch_best_conflicts_sum = self.get_best_chromosome().get_conflicts_sum();
             let population_size = self.get_population_size();
-            let epoch_number = epoch + 1;
 
             run_metrics.record_epoch(
                 epoch_number,
@@ -175,17 +198,20 @@ impl GeneticAlgorithm {
             let is_improvement = epoch_best_conflicts_sum < best_conflicts_sum;
             if is_improvement {
                 best_conflicts_sum = epoch_best_conflicts_sum;
+                stagnation_epochs = 0;
                 log::info!(
                     "ga improvement epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size}",
                 );
                 continue;
             }
 
+            stagnation_epochs += 1;
+
             let is_periodic_log = epoch_number % progress_log_interval == 0;
             let is_last_epoch = epoch_number == self.max_epoch_count;
             if is_periodic_log || is_last_epoch {
                 log::info!(
-                    "ga progress epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size}",
+                    "ga progress epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} stagnant_epochs={stagnation_epochs}",
                 );
             }
         }
@@ -377,6 +403,47 @@ impl GeneticAlgorithm {
 
         self.population = survivors;
     }
+
+    fn soft_restart_population(&mut self) -> usize {
+        if self.population.is_empty() {
+            return 0;
+        }
+
+        self.population
+            .sort_by_key(|chromosome| chromosome.get_conflicts_sum());
+
+        let board_size = self
+            .population
+            .first()
+            .map(|chromosome| chromosome.get_positions().len())
+            .unwrap_or(0);
+        let board_size = u16::try_from(board_size).expect("board size should fit into u16");
+
+        let mut elite_count = ((self.target_population_size as f32)
+            * self.elite_ratio
+            * SOFT_RESTART_ELITE_RATIO_SCALE)
+            .round() as usize;
+        elite_count = elite_count
+            .max(1)
+            .min(self.target_population_size)
+            .min(self.population.len());
+
+        if self.target_population_size > 1 {
+            elite_count = elite_count.min(self.target_population_size - 1);
+        }
+
+        self.population.truncate(elite_count);
+
+        let mut replaced_count = 0;
+        while self.population.len() < self.target_population_size {
+            let positions =
+                chromosome::generate_distinct_random_values_with_rng(board_size, &mut self.rng);
+            self.population.push(Chromosome::new(positions));
+            replaced_count += 1;
+        }
+
+        replaced_count
+    }
 }
 
 pub fn build_genetic_algorithm(
@@ -419,6 +486,11 @@ fn normalize_unit_interval(value: f32, fallback: f32) -> f32 {
 
 fn epoch_progress_log_interval(max_epoch_count: u32) -> u32 {
     (max_epoch_count / TARGET_EPOCH_PROGRESS_LOGS).max(1)
+}
+
+fn stagnation_reset_interval(max_epoch_count: u32) -> u32 {
+    (max_epoch_count / TARGET_STAGNATION_RESETS)
+        .clamp(MIN_STAGNATION_RESET_EPOCHS, MAX_STAGNATION_RESET_EPOCHS)
 }
 
 fn mate_chromosomes(parent_one: &[u16], parent_two: &[u16], rng: &mut impl Rng) -> Chromosome {
@@ -619,6 +691,61 @@ mod tests {
         let run_metrics = genetic_algorithm.run_algorithm();
         assert_eq!(run_metrics.solved_epoch(), Some(0));
         assert_eq!(run_metrics.epochs()[0].best_conflicts_sum(), 0);
+    }
+
+    #[test]
+    fn test_stagnation_reset_interval_is_bounded() {
+        assert_eq!(super::stagnation_reset_interval(10), 50);
+        assert_eq!(super::stagnation_reset_interval(5_000), 250);
+        assert_eq!(super::stagnation_reset_interval(100_000), 500);
+    }
+
+    #[test]
+    fn test_soft_restart_keeps_best_chromosome_and_refills_population() {
+        let solution = vec![0, 4, 7, 5, 2, 6, 1, 3];
+        let non_solution = vec![0, 1, 2, 3, 4, 5, 6, 7];
+
+        let mut population = vec![Chromosome::new(solution)];
+        population.extend((0..9).map(|_| Chromosome::new(non_solution.clone())));
+
+        let mut genetic_algorithm = GeneticAlgorithm::new(
+            population,
+            10,
+            10,
+            StdRng::seed_from_u64(7),
+            DEFAULT_MUTATION_RATE,
+            DEFAULT_ELITE_RATIO,
+        );
+
+        let replaced_count = genetic_algorithm.soft_restart_population();
+
+        assert_eq!(replaced_count, 9);
+        assert_eq!(genetic_algorithm.get_population_size(), 10);
+        assert_eq!(
+            genetic_algorithm.get_best_chromosome().get_conflicts_sum(),
+            0
+        );
+    }
+
+    #[test]
+    fn test_soft_restart_replaces_at_least_one_chromosome() {
+        let population = (0..4)
+            .map(|_| Chromosome::new(vec![0, 1, 2, 3]))
+            .collect::<Vec<_>>();
+
+        let mut genetic_algorithm = GeneticAlgorithm::new(
+            population,
+            4,
+            10,
+            StdRng::seed_from_u64(7),
+            DEFAULT_MUTATION_RATE,
+            1.0,
+        );
+
+        let replaced_count = genetic_algorithm.soft_restart_population();
+
+        assert!(replaced_count >= 1);
+        assert_eq!(genetic_algorithm.get_population_size(), 4);
     }
 
     #[test]
