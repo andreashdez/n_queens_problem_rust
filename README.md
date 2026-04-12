@@ -54,6 +54,13 @@ fn main() {
 }
 ```
 
+## GitHub Wiki sync
+
+`docs/index.md` is synced to GitHub Wiki `Home.md` by `.github/workflows/wiki-sync.yml`.
+
+- Enable Wiki in the repository settings (`Settings -> General -> Features -> Wikis`).
+- Push changes to `docs/index.md` on `main` or run the workflow manually.
+
 ## Development checks
 
 ```bash
