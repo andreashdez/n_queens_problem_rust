@@ -4,7 +4,7 @@ on:
   push:
     branches: ["main"]
     paths:
-      - "docs/index.md"
+      - "src/content/docs/index.md"
       - ".github/workflows/wiki-sync.yml"
   workflow_dispatch:
 
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   sync-wiki:
-    name: Publish docs/index.md to Wiki Home
+    name: Publish docs page to Wiki Home
     runs-on: ubuntu-latest
 
     steps:
@@ -36,7 +36,7 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          source = Path("docs/index.md").read_text(encoding="utf-8")
+          source = Path("src/content/docs/index.md").read_text(encoding="utf-8")
           if source.startswith("---\n"):
               end = source.find("\n---\n", 4)
               if end != -1:
@@ -63,5 +63,5 @@ jobs:
             exit 0
           fi
 
-          git commit -m "docs: sync wiki home from docs/index.md"
+          git commit -m "docs: sync wiki home from astro docs index"
           git push origin "HEAD:${WIKI_BRANCH}"

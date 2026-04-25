@@ -34,10 +34,12 @@ test:cargo:
 
 pages:
   stage: deploy
-  image: python:latest
+  image: node:20
   script:
-    - pip install mkdocs-material
-    - mkdocs build --site-dir public
+    - npm ci
+    - npm run build
+    - rm -rf public
+    - mv dist public
   artifacts:
     paths:
       - public

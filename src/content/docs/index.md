@@ -1,6 +1,6 @@
 ---
 title: N-Queens Problem
-author: Andreas Hernández Hauser
+description: A Rust implementation of the N-Queens problem using a genetic algorithm.
 ---
 
 A Rust implementation of the N-Queens problem using a genetic algorithm.
@@ -14,13 +14,13 @@ cargo run --release
 Run with explicit parameters:
 
 ```bash
-cargo run --release -- --size 18 --population 40000 --epochs 5000 --seed 42 --mutation-rate 0.08 --elite-ratio 0.10
+cargo run --release -- --size 18 --population 40000 --epochs 5000 --seed 42 --mutation-rate 0.08 --elite-ratio 0.10 --offspring-ratio 0.10
 ```
 
 Short aliases are also available:
 
 ```bash
-cargo run --release -- -n 18 -p 40000 -e 5000 -s 42 -m 0.08 -r 0.10
+cargo run --release -- -n 18 -p 40000 -e 5000 -s 42 -m 0.08 -r 0.10 -o 0.10
 ```
 
 ## CLI options
@@ -31,10 +31,13 @@ cargo run --release -- -n 18 -p 40000 -e 5000 -s 42 -m 0.08 -r 0.10
 - `-s`, `--seed <u64>`: optional deterministic RNG seed.
 - `-m`, `--mutation-rate <0..1>`: probability of mutating each non-elite chromosome. Default: `0.08`.
 - `-r`, `--elite-ratio <0..1>`: fraction of top chromosomes retained before random survivor sampling. Default: `0.10`.
+- `-o`, `--offspring-ratio <0..1>`: fraction of the target population produced as offspring each epoch. Default: `0.10`.
 - `--no-board`: skip board rendering output.
-- `--metrics-csv <path>`: write per-epoch run metrics to a CSV file (includes seed, elapsed ms, and best conflicts).
+- `--metrics-csv <path>`: write per-epoch run metrics to a CSV file (includes seed, offspring ratio, elapsed ms, and best conflicts).
 
 If `--seed` is omitted, a random seed is generated and logged.
+
+Tune `--offspring-ratio` to control GA turnover. For example, `0.10` creates offspring equal to 10% of the target population before survivor selection.
 
 ## Development checks
 
