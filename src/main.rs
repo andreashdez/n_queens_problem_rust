@@ -15,13 +15,14 @@ const DEFAULT_POPULATION_SIZE: usize = 40_000;
 const DEFAULT_MAX_EPOCHS: u32 = 5_000;
 const DEFAULT_MUTATION_RATE: f32 = ga::DEFAULT_MUTATION_RATE;
 const DEFAULT_ELITE_RATIO: f32 = ga::DEFAULT_ELITE_RATIO;
+const DEFAULT_OFFSPRING_RATIO: f32 = ga::DEFAULT_OFFSPRING_RATIO;
 
 #[derive(Debug, Parser)]
 #[command(name = "n_queens_problem")]
 #[command(version)]
 #[command(about = "N-Queens genetic solver")]
 #[command(
-    after_help = "Examples:\n  cargo run --release\n  cargo run --release -- -n 18 -p 40000 -e 5000 -s 42 -m 0.08 -r 0.10"
+    after_help = "Examples:\n  cargo run --release\n  cargo run --release -- -n 18 -p 40000 -e 5000 -s 42 -m 0.08 -r 0.10 -o 0.10"
 )]
 struct RunConfig {
     #[arg(
@@ -76,6 +77,15 @@ struct RunConfig {
     )]
     elite_ratio: f32,
     #[arg(
+        short = 'o',
+        long = "offspring-ratio",
+        value_name = "0..1",
+        default_value_t = DEFAULT_OFFSPRING_RATIO,
+        value_parser = parse_unit_interval,
+        help = "Fraction of target population produced as offspring each epoch"
+    )]
+    offspring_ratio: f32,
+    #[arg(
         long = "no-board",
         action = ArgAction::SetFalse,
         default_value_t = true,
@@ -117,7 +127,7 @@ fn write_run_metrics_csv(
 
     writeln!(
         metrics_file,
-        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,epoch,best_conflicts_sum,population_size,elapsed_ms"
+        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,epoch,best_conflicts_sum,population_size,elapsed_ms"
     )
     .map_err(|error| {
         format!(
@@ -129,12 +139,13 @@ fn write_run_metrics_csv(
     for epoch_metrics in run_metrics.epochs() {
         writeln!(
             metrics_file,
-            "{seed},{},{},{},{},{},{},{},{},{}",
+            "{seed},{},{},{},{},{},{},{},{},{},{}",
             run_config.board_size,
             run_config.population_size,
             run_config.max_epochs,
             run_config.mutation_rate,
             run_config.elite_ratio,
+            run_config.offspring_ratio,
             epoch_metrics.epoch(),
             epoch_metrics.best_conflicts_sum(),
             epoch_metrics.population_size(),
@@ -199,12 +210,13 @@ fn main() {
         .seed
         .unwrap_or_else(|| rand::rng().random::<u64>());
     log::info!(
-        "start n_queens_problem board_size={} population={} epochs={} seed={seed} mutation_rate={} elite_ratio={} draw_board={}",
+        "start n_queens_problem board_size={} population={} epochs={} seed={seed} mutation_rate={} elite_ratio={} offspring_ratio={} draw_board={}",
         run_config.board_size,
         run_config.population_size,
         run_config.max_epochs,
         run_config.mutation_rate,
         run_config.elite_ratio,
+        run_config.offspring_ratio,
         run_config.draw_board,
     );
 
@@ -215,7 +227,8 @@ fn main() {
         seed,
     )
     .with_mutation_rate(run_config.mutation_rate)
-    .with_elite_ratio(run_config.elite_ratio);
+    .with_elite_ratio(run_config.elite_ratio)
+    .with_offspring_ratio(run_config.offspring_ratio);
 
     let mut genetic_algorithm = ga::build_genetic_algorithm(ga_config);
 

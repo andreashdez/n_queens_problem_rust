@@ -7,8 +7,6 @@ use self::chromosome::Chromosome;
 
 pub mod chromosome;
 
-const MIN_TO_MATE: usize = 10;
-const MAX_TO_MATE: usize = 50;
 const TARGET_EPOCH_PROGRESS_LOGS: u32 = 20;
 const TARGET_STAGNATION_RESETS: u32 = 20;
 const MIN_STAGNATION_RESET_EPOCHS: u32 = 50;
@@ -20,6 +18,7 @@ const MIN_ADAPTIVE_ELITE_RATIO: f32 = 0.01;
 const MIN_ADAPTIVE_ELITE_RATIO_SCALE: f32 = 0.25;
 pub const DEFAULT_MUTATION_RATE: f32 = 0.08;
 pub const DEFAULT_ELITE_RATIO: f32 = 0.10;
+pub const DEFAULT_OFFSPRING_RATIO: f32 = 0.10;
 
 #[derive(Debug, Clone)]
 pub struct EpochMetrics {
@@ -99,6 +98,7 @@ pub struct GaConfig {
     pub seed: u64,
     pub mutation_rate: f32,
     pub elite_ratio: f32,
+    pub offspring_ratio: f32,
 }
 
 impl GaConfig {
@@ -110,6 +110,7 @@ impl GaConfig {
             seed,
             mutation_rate: DEFAULT_MUTATION_RATE,
             elite_ratio: DEFAULT_ELITE_RATIO,
+            offspring_ratio: DEFAULT_OFFSPRING_RATIO,
         }
     }
 
@@ -122,6 +123,11 @@ impl GaConfig {
         self.elite_ratio = elite_ratio;
         self
     }
+
+    pub fn with_offspring_ratio(mut self, offspring_ratio: f32) -> Self {
+        self.offspring_ratio = offspring_ratio;
+        self
+    }
 }
 
 pub struct GeneticAlgorithm {
@@ -131,6 +137,7 @@ pub struct GeneticAlgorithm {
     rng: StdRng,
     mutation_rate: f32,
     elite_ratio: f32,
+    offspring_ratio: f32,
 }
 
 impl GeneticAlgorithm {
@@ -141,6 +148,7 @@ impl GeneticAlgorithm {
         rng: StdRng,
         mutation_rate: f32,
         elite_ratio: f32,
+        offspring_ratio: f32,
     ) -> Self {
         Self {
             population,
@@ -149,6 +157,7 @@ impl GeneticAlgorithm {
             rng,
             mutation_rate,
             elite_ratio,
+            offspring_ratio,
         }
     }
 
@@ -184,15 +193,19 @@ impl GeneticAlgorithm {
 
         let progress_log_interval = epoch_progress_log_interval(self.max_epoch_count);
         let stagnation_reset_interval = stagnation_reset_interval(self.max_epoch_count);
+        let offspring_count =
+            offspring_count_for_population(self.target_population_size, self.offspring_ratio);
         let mut stagnation_epochs = 0;
         log::info!(
-            "running ga epochs={} population_size={} progress_log_interval={} stagnation_reset_interval={} initial_best_conflicts_sum={best_conflicts_sum} base_mutation_rate={} base_elite_ratio={}",
+            "running ga epochs={} population_size={} progress_log_interval={} stagnation_reset_interval={} initial_best_conflicts_sum={best_conflicts_sum} base_mutation_rate={} base_elite_ratio={} offspring_ratio={} offspring_count={}",
             self.max_epoch_count,
             self.get_population_size(),
             progress_log_interval,
             stagnation_reset_interval,
             self.mutation_rate,
             self.elite_ratio,
+            self.offspring_ratio,
+            offspring_count,
         );
 
         for epoch in 0..self.max_epoch_count {
@@ -226,7 +239,7 @@ impl GeneticAlgorithm {
                 stagnation_reset_interval,
             );
 
-            self.mate_random_chromosomes(MIN_TO_MATE, MAX_TO_MATE);
+            self.mate_random_chromosomes(offspring_count);
             self.mutate_population(epoch_mutation_rate);
             self.select_survivors(epoch_elite_ratio);
             self.calc_fitness();
@@ -327,36 +340,29 @@ impl GeneticAlgorithm {
         });
     }
 
-    fn mate_random_chromosomes(&mut self, min_to_mate: usize, max_to_mate: usize) {
-        if self.population.is_empty() {
+    fn mate_random_chromosomes(&mut self, offspring_count: usize) {
+        if self.population.is_empty() || offspring_count == 0 {
             return;
         }
 
-        let mate_amount = if max_to_mate > min_to_mate {
-            self.rng.random_range(min_to_mate..max_to_mate)
-        } else {
-            min_to_mate
-        };
-
-        let fitness_sum = self
-            .population
-            .iter()
-            .map(|chromosome| chromosome.get_fitness())
-            .sum::<f32>();
+        let cumulative_fitness = cumulative_fitness(&self.population);
+        let fitness_sum = cumulative_fitness.last().copied().unwrap_or_default();
 
         if fitness_sum <= f32::EPSILON {
             log::debug!("fitness sum is near zero; selecting parents uniformly at random");
         }
 
         log::debug!(
-            "select random chromosomes [mate_amount={mate_amount}, fitness_sum={fitness_sum}]",
+            "select random chromosomes [offspring_count={offspring_count}, fitness_sum={fitness_sum}]",
         );
 
-        for _ in 0..mate_amount {
-            let Some(parent_one_index) = self.select_parent_index(fitness_sum) else {
+        for _ in 0..offspring_count {
+            let Some(parent_one_index) = self.select_parent_index(&cumulative_fitness, fitness_sum)
+            else {
                 break;
             };
-            let Some(parent_two_index) = self.select_parent_index(fitness_sum) else {
+            let Some(parent_two_index) = self.select_parent_index(&cumulative_fitness, fitness_sum)
+            else {
                 break;
             };
 
@@ -371,41 +377,47 @@ impl GeneticAlgorithm {
         }
     }
 
-    fn select_parent_index(&mut self, fitness_sum: f32) -> Option<usize> {
-        if self.population.is_empty() {
+    fn select_parent_index(
+        &mut self,
+        cumulative_fitness: &[f32],
+        fitness_sum: f32,
+    ) -> Option<usize> {
+        if cumulative_fitness.is_empty() {
             return None;
         }
 
-        if fitness_sum <= f32::EPSILON {
-            return Some(self.rng.random_range(0..self.population.len()));
+        if fitness_sum <= f32::EPSILON || !fitness_sum.is_finite() {
+            return Some(self.rng.random_range(0..cumulative_fitness.len()));
         }
 
-        if let Some(index) = self.select_random_chromosome_index(fitness_sum) {
+        if let Some(index) = self.select_random_chromosome_index(cumulative_fitness, fitness_sum) {
             return Some(index);
         }
 
-        Some(self.rng.random_range(0..self.population.len()))
+        Some(self.rng.random_range(0..cumulative_fitness.len()))
     }
 
-    fn select_random_chromosome_index(&mut self, fitness_sum: f32) -> Option<usize> {
-        if self.population.is_empty() || fitness_sum <= f32::EPSILON {
+    fn select_random_chromosome_index(
+        &mut self,
+        cumulative_fitness: &[f32],
+        fitness_sum: f32,
+    ) -> Option<usize> {
+        if cumulative_fitness.is_empty() || fitness_sum <= f32::EPSILON || !fitness_sum.is_finite()
+        {
             return None;
         }
 
         let roulette_spin = self.rng.random_range(0.0..fitness_sum);
-        let mut selection_rank = 0.0;
+        let index =
+            cumulative_fitness.partition_point(|selection_rank| *selection_rank < roulette_spin);
+        let index = index.min(cumulative_fitness.len() - 1);
 
-        for (index, chromosome) in self.population.iter().enumerate() {
-            selection_rank += chromosome.get_fitness();
-            if selection_rank >= roulette_spin {
-                log::trace!(
-                    "selecting chromosome index={index} selection_rank={selection_rank} roulette_spin={roulette_spin}",
-                );
-                return Some(index);
-            }
-        }
+        log::trace!(
+            "selecting chromosome index={index} selection_rank={} roulette_spin={roulette_spin}",
+            cumulative_fitness[index],
+        );
 
-        self.population.len().checked_sub(1)
+        Some(index)
     }
 
     fn mutate_population(&mut self, mutation_rate: f32) {
@@ -535,6 +547,7 @@ pub fn build_genetic_algorithm(config: GaConfig) -> GeneticAlgorithm {
     let target_population_size = config.initial_population.max(1);
     let mutation_rate = normalize_unit_interval(config.mutation_rate, DEFAULT_MUTATION_RATE);
     let elite_ratio = normalize_unit_interval(config.elite_ratio, DEFAULT_ELITE_RATIO);
+    let offspring_ratio = normalize_unit_interval(config.offspring_ratio, DEFAULT_OFFSPRING_RATIO);
     let mut rng = StdRng::seed_from_u64(config.seed);
     let mut population: Vec<Chromosome> = Vec::with_capacity(target_population_size);
 
@@ -551,7 +564,32 @@ pub fn build_genetic_algorithm(config: GaConfig) -> GeneticAlgorithm {
         rng,
         mutation_rate,
         elite_ratio,
+        offspring_ratio,
     )
+}
+
+fn offspring_count_for_population(target_population_size: usize, offspring_ratio: f32) -> usize {
+    if target_population_size == 0 || offspring_ratio <= 0.0 || !offspring_ratio.is_finite() {
+        return 0;
+    }
+
+    ((target_population_size as f64) * f64::from(offspring_ratio))
+        .round()
+        .max(1.0) as usize
+}
+
+fn cumulative_fitness(population: &[Chromosome]) -> Vec<f32> {
+    let mut selection_rank = 0.0;
+    population
+        .iter()
+        .map(|chromosome| {
+            let fitness = chromosome.get_fitness();
+            if fitness.is_finite() && fitness > 0.0 {
+                selection_rank += fitness;
+            }
+            selection_rank
+        })
+        .collect()
 }
 
 fn normalize_unit_interval(value: f32, fallback: f32) -> f32 {
@@ -700,8 +738,8 @@ mod tests {
     use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 
     use super::{
-        DEFAULT_ELITE_RATIO, DEFAULT_MUTATION_RATE, GaConfig, GeneticAlgorithm,
-        build_genetic_algorithm, chromosome::Chromosome, pmx,
+        DEFAULT_ELITE_RATIO, DEFAULT_MUTATION_RATE, DEFAULT_OFFSPRING_RATIO, GaConfig,
+        GeneticAlgorithm, build_genetic_algorithm, chromosome::Chromosome, pmx,
     };
 
     fn build_test_algorithm(population: Vec<Chromosome>) -> GeneticAlgorithm {
@@ -713,6 +751,7 @@ mod tests {
             StdRng::seed_from_u64(7),
             DEFAULT_MUTATION_RATE,
             DEFAULT_ELITE_RATIO,
+            DEFAULT_OFFSPRING_RATIO,
         )
     }
 
@@ -836,6 +875,27 @@ mod tests {
     }
 
     #[test]
+    fn test_offspring_count_scales_with_population() {
+        assert_eq!(super::offspring_count_for_population(40_000, 0.10), 4_000);
+        assert_eq!(super::offspring_count_for_population(10, 0.2), 2);
+        assert_eq!(super::offspring_count_for_population(10, 0.0), 0);
+        assert_eq!(super::offspring_count_for_population(1, 0.001), 1);
+    }
+
+    #[test]
+    fn test_mate_random_chromosomes_uses_offspring_count() {
+        let population = (0..8)
+            .map(|seed| Chromosome::new(shuffled_values(8, seed)))
+            .collect::<Vec<_>>();
+
+        let mut genetic_algorithm = build_test_algorithm(population);
+        genetic_algorithm.calc_fitness();
+        genetic_algorithm.mate_random_chromosomes(3);
+
+        assert_eq!(genetic_algorithm.get_population_size(), 11);
+    }
+
+    #[test]
     fn test_soft_restart_keeps_best_chromosome_and_refills_population() {
         let solution = vec![0, 4, 7, 5, 2, 6, 1, 3];
         let non_solution = vec![0, 1, 2, 3, 4, 5, 6, 7];
@@ -850,6 +910,7 @@ mod tests {
             StdRng::seed_from_u64(7),
             DEFAULT_MUTATION_RATE,
             DEFAULT_ELITE_RATIO,
+            DEFAULT_OFFSPRING_RATIO,
         );
 
         let replaced_count = genetic_algorithm.soft_restart_population(DEFAULT_ELITE_RATIO);
@@ -875,6 +936,7 @@ mod tests {
             StdRng::seed_from_u64(7),
             DEFAULT_MUTATION_RATE,
             1.0,
+            DEFAULT_OFFSPRING_RATIO,
         );
 
         let replaced_count = genetic_algorithm.soft_restart_population(1.0);
