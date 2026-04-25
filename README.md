@@ -36,6 +36,16 @@ If `--seed` is omitted, a random seed is generated and logged.
 
 Tune `--offspring-ratio` to control GA turnover. For example, `0.10` creates offspring equal to 10% of the target population before survivor selection.
 
+## Parameter sweeps
+
+Run multiple seeds per configuration and compare solve rate, median solved epoch, and runtime:
+
+```bash
+cargo run --release --example parameter_sweep -- --sizes 18 --populations 40000 --epochs 5000 --seeds 20 --mutation-rates 0.06,0.08 --elite-ratios 0.05,0.10 --offspring-ratios 0.05,0.10
+```
+
+The sweep prints CSV rows with one aggregate result per parameter combination.
+
 ## Library usage
 
 ```rust
