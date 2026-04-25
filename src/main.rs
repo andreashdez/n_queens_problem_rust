@@ -18,6 +18,8 @@ const DEFAULT_MUTATION_RATE: f32 = ga::DEFAULT_MUTATION_RATE;
 const DEFAULT_ELITE_RATIO: f32 = ga::DEFAULT_ELITE_RATIO;
 const DEFAULT_OFFSPRING_RATIO: f32 = ga::DEFAULT_OFFSPRING_RATIO;
 const DEFAULT_MIN_DIVERSITY_RATIO: f32 = ga::DEFAULT_MIN_DIVERSITY_RATIO;
+const DEFAULT_SELECTION_STRATEGY: ga::SelectionStrategy = ga::DEFAULT_SELECTION_STRATEGY;
+const DEFAULT_TOURNAMENT_SIZE: usize = ga::DEFAULT_TOURNAMENT_SIZE;
 
 #[derive(Debug, Parser)]
 #[command(name = "n_queens_problem")]
@@ -96,6 +98,22 @@ struct RunConfig {
     )]
     min_diversity_ratio: f32,
     #[arg(
+        long = "selection",
+        value_name = "roulette|tournament",
+        default_value_t = DEFAULT_SELECTION_STRATEGY,
+        value_parser = parse_selection_strategy,
+        help = "Parent selection strategy"
+    )]
+    selection_strategy: ga::SelectionStrategy,
+    #[arg(
+        long = "tournament-size",
+        value_name = "COUNT",
+        default_value_t = DEFAULT_TOURNAMENT_SIZE,
+        value_parser = parse_positive_usize,
+        help = "Candidate count for tournament selection"
+    )]
+    tournament_size: usize,
+    #[arg(
         long = "no-board",
         action = ArgAction::SetFalse,
         default_value_t = true,
@@ -161,6 +179,8 @@ fn print_run_summary_json(
         "elite_ratio": json_ratio(run_config.elite_ratio),
         "offspring_ratio": json_ratio(run_config.offspring_ratio),
         "min_diversity_ratio": json_ratio(run_config.min_diversity_ratio),
+        "selection_strategy": run_config.selection_strategy.to_string(),
+        "tournament_size": run_config.tournament_size,
         "final_population": final_population,
         "final_unique_chromosomes": final_epoch.map(|metrics| metrics.unique_chromosomes()),
         "final_diversity_ratio": final_epoch.map(|metrics| json_ratio(metrics.diversity_ratio())),
@@ -207,7 +227,7 @@ fn write_run_metrics_csv(
 
     writeln!(
         metrics_file,
-        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,epoch,best_conflicts_sum,population_size,elapsed_ms,average_conflicts_sum,unique_chromosomes,diversity_ratio,epoch_mutation_rate,epoch_elite_ratio,offspring_count,stagnation_epochs,diversity_replacements"
+        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,epoch,best_conflicts_sum,population_size,elapsed_ms,average_conflicts_sum,unique_chromosomes,diversity_ratio,epoch_mutation_rate,epoch_elite_ratio,offspring_count,stagnation_epochs,diversity_replacements"
     )
     .map_err(|error| {
         format!(
@@ -219,7 +239,7 @@ fn write_run_metrics_csv(
     for epoch_metrics in run_metrics.epochs() {
         writeln!(
             metrics_file,
-            "{seed},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{seed},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             run_config.board_size,
             run_config.population_size,
             run_config.max_epochs,
@@ -227,6 +247,8 @@ fn write_run_metrics_csv(
             run_config.elite_ratio,
             run_config.offspring_ratio,
             run_config.min_diversity_ratio,
+            run_config.selection_strategy,
+            run_config.tournament_size,
             epoch_metrics.epoch(),
             epoch_metrics.best_conflicts_sum(),
             epoch_metrics.population_size(),
@@ -287,6 +309,14 @@ fn parse_unit_interval(raw_value: &str) -> Result<f32, String> {
     Ok(value)
 }
 
+fn parse_selection_strategy(raw_value: &str) -> Result<ga::SelectionStrategy, String> {
+    match raw_value.to_ascii_lowercase().as_str() {
+        "roulette" => Ok(ga::SelectionStrategy::Roulette),
+        "tournament" => Ok(ga::SelectionStrategy::Tournament),
+        _ => Err("must be one of: roulette, tournament".to_owned()),
+    }
+}
+
 fn parse_log_level(raw_value: &str) -> Result<log::LevelFilter, String> {
     match raw_value.to_ascii_lowercase().as_str() {
         "off" => Ok(log::LevelFilter::Off),
@@ -322,6 +352,8 @@ fn main() {
     .with_elite_ratio(run_config.elite_ratio)
     .with_offspring_ratio(run_config.offspring_ratio)
     .with_min_diversity_ratio(run_config.min_diversity_ratio)
+    .with_selection_strategy(run_config.selection_strategy)
+    .with_tournament_size(run_config.tournament_size)
     .validated()
     .unwrap_or_else(|error| {
         eprintln!("invalid GA config: {error}");
@@ -329,7 +361,7 @@ fn main() {
     });
 
     log::info!(
-        "start n_queens_problem board_size={} population={} epochs={} seed={seed} mutation_rate={} elite_ratio={} offspring_ratio={} min_diversity_ratio={} draw_board={}",
+        "start n_queens_problem board_size={} population={} epochs={} seed={seed} mutation_rate={} elite_ratio={} offspring_ratio={} min_diversity_ratio={} selection_strategy={} tournament_size={} draw_board={}",
         run_config.board_size,
         run_config.population_size,
         run_config.max_epochs,
@@ -337,6 +369,8 @@ fn main() {
         run_config.elite_ratio,
         run_config.offspring_ratio,
         run_config.min_diversity_ratio,
+        run_config.selection_strategy,
+        run_config.tournament_size,
         run_config.draw_board,
     );
 

@@ -20,6 +20,23 @@ pub const DEFAULT_MUTATION_RATE: f32 = 0.08;
 pub const DEFAULT_ELITE_RATIO: f32 = 0.10;
 pub const DEFAULT_OFFSPRING_RATIO: f32 = 0.10;
 pub const DEFAULT_MIN_DIVERSITY_RATIO: f32 = 0.10;
+pub const DEFAULT_SELECTION_STRATEGY: SelectionStrategy = SelectionStrategy::Roulette;
+pub const DEFAULT_TOURNAMENT_SIZE: usize = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionStrategy {
+    Roulette,
+    Tournament,
+}
+
+impl fmt::Display for SelectionStrategy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Roulette => formatter.write_str("roulette"),
+            Self::Tournament => formatter.write_str("tournament"),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct EpochMetrics {
@@ -158,6 +175,8 @@ pub struct GaConfig {
     pub elite_ratio: f32,
     pub offspring_ratio: f32,
     pub min_diversity_ratio: f32,
+    pub selection_strategy: SelectionStrategy,
+    pub tournament_size: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,6 +188,7 @@ pub enum GaConfigError {
     InvalidEliteRatio,
     InvalidOffspringRatio,
     InvalidMinDiversityRatio,
+    TournamentSizeZero,
 }
 
 impl fmt::Display for GaConfigError {
@@ -192,6 +212,9 @@ impl fmt::Display for GaConfigError {
             }
             Self::InvalidMinDiversityRatio => formatter
                 .write_str("minimum diversity ratio must be finite and between 0.0 and 1.0"),
+            Self::TournamentSizeZero => {
+                formatter.write_str("tournament size must be greater than 0")
+            }
         }
     }
 }
@@ -209,6 +232,8 @@ impl GaConfig {
             elite_ratio: DEFAULT_ELITE_RATIO,
             offspring_ratio: DEFAULT_OFFSPRING_RATIO,
             min_diversity_ratio: DEFAULT_MIN_DIVERSITY_RATIO,
+            selection_strategy: DEFAULT_SELECTION_STRATEGY,
+            tournament_size: DEFAULT_TOURNAMENT_SIZE,
         }
     }
 
@@ -238,6 +263,16 @@ impl GaConfig {
 
     pub fn with_min_diversity_ratio(mut self, min_diversity_ratio: f32) -> Self {
         self.min_diversity_ratio = min_diversity_ratio;
+        self
+    }
+
+    pub fn with_selection_strategy(mut self, selection_strategy: SelectionStrategy) -> Self {
+        self.selection_strategy = selection_strategy;
+        self
+    }
+
+    pub fn with_tournament_size(mut self, tournament_size: usize) -> Self {
+        self.tournament_size = tournament_size;
         self
     }
 
@@ -275,6 +310,10 @@ impl GaConfig {
             return Err(GaConfigError::InvalidMinDiversityRatio);
         }
 
+        if self.tournament_size == 0 {
+            return Err(GaConfigError::TournamentSizeZero);
+        }
+
         Ok(())
     }
 }
@@ -288,6 +327,8 @@ pub struct GeneticAlgorithm {
     elite_ratio: f32,
     offspring_ratio: f32,
     min_diversity_ratio: f32,
+    selection_strategy: SelectionStrategy,
+    tournament_size: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -298,6 +339,8 @@ struct GeneticAlgorithmParams {
     elite_ratio: f32,
     offspring_ratio: f32,
     min_diversity_ratio: f32,
+    selection_strategy: SelectionStrategy,
+    tournament_size: usize,
 }
 
 impl GeneticAlgorithm {
@@ -311,6 +354,8 @@ impl GeneticAlgorithm {
             elite_ratio: params.elite_ratio,
             offspring_ratio: params.offspring_ratio,
             min_diversity_ratio: params.min_diversity_ratio,
+            selection_strategy: params.selection_strategy,
+            tournament_size: params.tournament_size,
         }
     }
 
@@ -356,7 +401,7 @@ impl GeneticAlgorithm {
         let stagnation_reset_interval = stagnation_reset_interval(self.max_epoch_count);
         let mut stagnation_epochs = 0;
         log::info!(
-            "running ga epochs={} population_size={} progress_log_interval={} stagnation_reset_interval={} initial_best_conflicts_sum={best_conflicts_sum} base_mutation_rate={} base_elite_ratio={} offspring_ratio={} offspring_count={}",
+            "running ga epochs={} population_size={} progress_log_interval={} stagnation_reset_interval={} initial_best_conflicts_sum={best_conflicts_sum} base_mutation_rate={} base_elite_ratio={} offspring_ratio={} offspring_count={} selection_strategy={} tournament_size={}",
             self.max_epoch_count,
             self.get_population_size(),
             progress_log_interval,
@@ -365,6 +410,8 @@ impl GeneticAlgorithm {
             self.elite_ratio,
             self.offspring_ratio,
             offspring_count,
+            self.selection_strategy,
+            self.tournament_size,
         );
 
         for epoch in 0..self.max_epoch_count {
@@ -518,24 +565,34 @@ impl GeneticAlgorithm {
             return;
         }
 
-        let cumulative_fitness = cumulative_fitness(&self.population);
-        let fitness_sum = cumulative_fitness.last().copied().unwrap_or_default();
+        let roulette_selection = match self.selection_strategy {
+            SelectionStrategy::Roulette => {
+                let cumulative_fitness = cumulative_fitness(&self.population);
+                let fitness_sum = cumulative_fitness.last().copied().unwrap_or_default();
+                if fitness_sum <= f32::EPSILON {
+                    log::debug!("fitness sum is near zero; selecting parents uniformly at random");
+                }
 
-        if fitness_sum <= f32::EPSILON {
-            log::debug!("fitness sum is near zero; selecting parents uniformly at random");
-        }
+                Some((cumulative_fitness, fitness_sum))
+            }
+            SelectionStrategy::Tournament => None,
+        };
 
         log::debug!(
-            "select random chromosomes [offspring_count={offspring_count}, fitness_sum={fitness_sum}]",
+            "select random chromosomes [offspring_count={offspring_count}, selection_strategy={} tournament_size={}]",
+            self.selection_strategy,
+            self.tournament_size,
         );
 
         for _ in 0..offspring_count {
-            let Some(parent_one_index) = self.select_parent_index(&cumulative_fitness, fitness_sum)
-            else {
+            let Some(parent_one_index) = self.select_parent_index(roulette_selection.as_ref().map(
+                |(cumulative_fitness, fitness_sum)| (cumulative_fitness.as_slice(), *fitness_sum),
+            )) else {
                 break;
             };
-            let Some(parent_two_index) = self.select_parent_index(&cumulative_fitness, fitness_sum)
-            else {
+            let Some(parent_two_index) = self.select_parent_index(roulette_selection.as_ref().map(
+                |(cumulative_fitness, fitness_sum)| (cumulative_fitness.as_slice(), *fitness_sum),
+            )) else {
                 break;
             };
 
@@ -550,7 +607,17 @@ impl GeneticAlgorithm {
         }
     }
 
-    fn select_parent_index(
+    fn select_parent_index(&mut self, roulette_selection: Option<(&[f32], f32)>) -> Option<usize> {
+        match self.selection_strategy {
+            SelectionStrategy::Roulette => {
+                let (cumulative_fitness, fitness_sum) = roulette_selection?;
+                self.select_roulette_parent_index(cumulative_fitness, fitness_sum)
+            }
+            SelectionStrategy::Tournament => self.select_tournament_parent_index(),
+        }
+    }
+
+    fn select_roulette_parent_index(
         &mut self,
         cumulative_fitness: &[f32],
         fitness_sum: f32,
@@ -568,6 +635,34 @@ impl GeneticAlgorithm {
         }
 
         Some(self.rng.random_range(0..cumulative_fitness.len()))
+    }
+
+    fn select_tournament_parent_index(&mut self) -> Option<usize> {
+        let population_size = self.population.len();
+        if population_size == 0 {
+            return None;
+        }
+
+        if self.tournament_size >= population_size {
+            return self
+                .population
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, chromosome)| chromosome.get_conflicts_sum())
+                .map(|(index, _)| index);
+        }
+
+        let mut best_index = self.rng.random_range(0..population_size);
+        for _ in 1..self.tournament_size {
+            let candidate_index = self.rng.random_range(0..population_size);
+            if self.population[candidate_index].get_conflicts_sum()
+                < self.population[best_index].get_conflicts_sum()
+            {
+                best_index = candidate_index;
+            }
+        }
+
+        Some(best_index)
     }
 
     fn select_random_chromosome_index(
@@ -766,6 +861,7 @@ pub fn build_genetic_algorithm(config: GaConfig) -> GeneticAlgorithm {
     let offspring_ratio = normalize_unit_interval(config.offspring_ratio, DEFAULT_OFFSPRING_RATIO);
     let min_diversity_ratio =
         normalize_unit_interval(config.min_diversity_ratio, DEFAULT_MIN_DIVERSITY_RATIO);
+    let tournament_size = config.tournament_size.max(1);
     let mut rng = StdRng::seed_from_u64(config.seed);
     let mut population: Vec<Chromosome> = Vec::with_capacity(target_population_size);
 
@@ -785,6 +881,8 @@ pub fn build_genetic_algorithm(config: GaConfig) -> GeneticAlgorithm {
             elite_ratio,
             offspring_ratio,
             min_diversity_ratio,
+            selection_strategy: config.selection_strategy,
+            tournament_size,
         },
     )
 }
@@ -1053,7 +1151,8 @@ mod tests {
 
     use super::{
         DEFAULT_ELITE_RATIO, DEFAULT_MIN_DIVERSITY_RATIO, DEFAULT_MUTATION_RATE,
-        DEFAULT_OFFSPRING_RATIO, GaConfig, GaConfigError, GeneticAlgorithm, GeneticAlgorithmParams,
+        DEFAULT_OFFSPRING_RATIO, DEFAULT_SELECTION_STRATEGY, DEFAULT_TOURNAMENT_SIZE, GaConfig,
+        GaConfigError, GeneticAlgorithm, GeneticAlgorithmParams, SelectionStrategy,
         build_genetic_algorithm, chromosome::Chromosome, pmx,
     };
 
@@ -1069,6 +1168,8 @@ mod tests {
                 elite_ratio: DEFAULT_ELITE_RATIO,
                 offspring_ratio: DEFAULT_OFFSPRING_RATIO,
                 min_diversity_ratio: DEFAULT_MIN_DIVERSITY_RATIO,
+                selection_strategy: DEFAULT_SELECTION_STRATEGY,
+                tournament_size: DEFAULT_TOURNAMENT_SIZE,
             },
         )
     }
@@ -1089,6 +1190,8 @@ mod tests {
             .with_elite_ratio(0.20)
             .with_offspring_ratio(0.50)
             .with_min_diversity_ratio(0.15)
+            .with_selection_strategy(SelectionStrategy::Tournament)
+            .with_tournament_size(5)
             .validated()
             .expect("valid customized config should pass validation");
 
@@ -1096,6 +1199,8 @@ mod tests {
         assert_eq!(config.initial_population, 32);
         assert_eq!(config.max_epoch_count, 100);
         assert_eq!(config.min_diversity_ratio, 0.15);
+        assert_eq!(config.selection_strategy, SelectionStrategy::Tournament);
+        assert_eq!(config.tournament_size, 5);
     }
 
     #[test]
@@ -1135,6 +1240,12 @@ mod tests {
                 .with_min_diversity_ratio(1.1)
                 .validate(),
             Err(GaConfigError::InvalidMinDiversityRatio)
+        );
+        assert_eq!(
+            GaConfig::new(8, 32, 100, 42)
+                .with_tournament_size(0)
+                .validate(),
+            Err(GaConfigError::TournamentSizeZero)
         );
     }
 
@@ -1331,6 +1442,42 @@ mod tests {
     }
 
     #[test]
+    fn test_tournament_selection_picks_best_when_tournament_covers_population() {
+        let solution = vec![0, 4, 7, 5, 2, 6, 1, 3];
+        let high_conflict = vec![0, 1, 2, 3, 4, 5, 6, 7];
+        let higher_conflict = vec![7, 6, 5, 4, 3, 2, 1, 0];
+        let population = vec![
+            Chromosome::new(high_conflict),
+            Chromosome::new(solution.clone()),
+            Chromosome::new(higher_conflict),
+        ];
+
+        let mut genetic_algorithm = GeneticAlgorithm::new(
+            population,
+            StdRng::seed_from_u64(7),
+            GeneticAlgorithmParams {
+                target_population_size: 3,
+                max_epoch_count: 10,
+                mutation_rate: DEFAULT_MUTATION_RATE,
+                elite_ratio: DEFAULT_ELITE_RATIO,
+                offspring_ratio: DEFAULT_OFFSPRING_RATIO,
+                min_diversity_ratio: DEFAULT_MIN_DIVERSITY_RATIO,
+                selection_strategy: SelectionStrategy::Tournament,
+                tournament_size: 3,
+            },
+        );
+
+        let selected_index = genetic_algorithm
+            .select_tournament_parent_index()
+            .expect("non-empty population should select a parent");
+
+        assert_eq!(
+            genetic_algorithm.population[selected_index].get_positions(),
+            solution.as_slice()
+        );
+    }
+
+    #[test]
     fn test_mutation_preserves_configured_elite_set() {
         let solution = vec![0, 4, 7, 5, 2, 6, 1, 3];
         let low_conflict = vec![0, 2, 4, 6, 1, 3, 5, 7];
@@ -1374,6 +1521,8 @@ mod tests {
                 elite_ratio: 0.25,
                 offspring_ratio: DEFAULT_OFFSPRING_RATIO,
                 min_diversity_ratio: 0.50,
+                selection_strategy: DEFAULT_SELECTION_STRATEGY,
+                tournament_size: DEFAULT_TOURNAMENT_SIZE,
             },
         );
 
@@ -1407,6 +1556,8 @@ mod tests {
                 elite_ratio: DEFAULT_ELITE_RATIO,
                 offspring_ratio: DEFAULT_OFFSPRING_RATIO,
                 min_diversity_ratio: DEFAULT_MIN_DIVERSITY_RATIO,
+                selection_strategy: DEFAULT_SELECTION_STRATEGY,
+                tournament_size: DEFAULT_TOURNAMENT_SIZE,
             },
         );
 
@@ -1436,6 +1587,8 @@ mod tests {
                 elite_ratio: 1.0,
                 offspring_ratio: DEFAULT_OFFSPRING_RATIO,
                 min_diversity_ratio: DEFAULT_MIN_DIVERSITY_RATIO,
+                selection_strategy: DEFAULT_SELECTION_STRATEGY,
+                tournament_size: DEFAULT_TOURNAMENT_SIZE,
             },
         );
 

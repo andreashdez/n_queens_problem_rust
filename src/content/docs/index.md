@@ -14,7 +14,7 @@ cargo run --release
 Run with explicit parameters:
 
 ```bash
-cargo run --release -- --size 18 --population 40000 --epochs 5000 --seed 42 --mutation-rate 0.08 --elite-ratio 0.10 --offspring-ratio 0.10
+cargo run --release -- --size 18 --population 40000 --epochs 5000 --seed 42 --mutation-rate 0.08 --elite-ratio 0.10 --offspring-ratio 0.10 --selection tournament --tournament-size 3
 ```
 
 Short aliases are also available:
@@ -33,6 +33,8 @@ cargo run --release -- -n 18 -p 40000 -e 5000 -s 42 -m 0.08 -r 0.10 -o 0.10
 - `-r`, `--elite-ratio <0..1>`: fraction of top chromosomes retained before random survivor sampling. Default: `0.10`.
 - `-o`, `--offspring-ratio <0..1>`: fraction of the target population produced as offspring each epoch. Default: `0.10`.
 - `--min-diversity-ratio <0..1>`: minimum unique-chromosome ratio before non-elites are randomly refreshed. Default: `0.10`.
+- `--selection <roulette|tournament>`: parent selection strategy. Default: `roulette`.
+- `--tournament-size <count>`: candidate count for tournament selection. Default: `3`.
 - `--no-board`: skip board rendering output.
 - `--metrics-csv <path>`: write per-epoch run metrics to a CSV file (includes best/average conflicts, unique chromosomes, adaptive rates, offspring count, stagnation, and elapsed ms).
 - `--json`: print a machine-readable JSON summary. This suppresses logs and board rendering so stdout remains valid JSON.
@@ -43,13 +45,14 @@ If `--seed` is omitted, a random seed is generated and logged.
 
 Tune `--offspring-ratio` to control GA turnover. For example, `0.10` creates offspring equal to 10% of the target population before survivor selection.
 Tune `--min-diversity-ratio` to control diversity recovery. When unique chromosome diversity drops below the threshold, the solver refreshes non-elite chromosomes with random permutations.
+Use `--selection tournament` to choose parents by sampling `--tournament-size` candidates and mating the lowest-conflict chromosomes from those samples.
 
 ## Parameter sweeps
 
 Run multiple seeds per configuration and compare solve rate, median solved epoch, and runtime:
 
 ```bash
-cargo run --release --example parameter_sweep -- --sizes 18 --populations 40000 --epochs 5000 --seeds 20 --mutation-rates 0.06,0.08 --elite-ratios 0.05,0.10 --offspring-ratios 0.05,0.10 --min-diversity-ratios 0.05,0.10
+cargo run --release --example parameter_sweep -- --sizes 18 --populations 40000 --epochs 5000 --seeds 20 --mutation-rates 0.06,0.08 --elite-ratios 0.05,0.10 --offspring-ratios 0.05,0.10 --min-diversity-ratios 0.05,0.10 --selection-strategies roulette,tournament --tournament-sizes 3,5
 ```
 
 The sweep prints CSV rows with one aggregate result per parameter combination.
