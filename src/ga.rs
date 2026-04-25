@@ -240,7 +240,7 @@ impl GeneticAlgorithm {
             );
 
             self.mate_random_chromosomes(offspring_count);
-            self.mutate_population(epoch_mutation_rate);
+            self.mutate_population(epoch_mutation_rate, epoch_elite_ratio);
             self.select_survivors(epoch_elite_ratio);
             self.calc_fitness();
 
@@ -420,23 +420,24 @@ impl GeneticAlgorithm {
         Some(index)
     }
 
-    fn mutate_population(&mut self, mutation_rate: f32) {
-        if self.population.len() < 2 {
+    fn mutate_population(&mut self, mutation_rate: f32, elite_ratio: f32) {
+        if self.population.len() < 2 || mutation_rate <= 0.0 || !mutation_rate.is_finite() {
             return;
         }
 
-        let best_index = self
-            .population
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, chromosome)| chromosome.get_conflicts_sum())
-            .map(|(index, _)| index);
+        let elite_ratio = normalize_unit_interval(elite_ratio, self.elite_ratio);
+        let elite_count = elite_count_for_population(
+            self.target_population_size,
+            self.population.len(),
+            elite_ratio,
+        );
+        select_elites_to_front(&mut self.population, elite_count);
 
         let mut planned_swaps = vec![None; self.population.len()];
         let rng = &mut self.rng;
 
         for (index, chromosome) in self.population.iter().enumerate() {
-            if Some(index) == best_index {
+            if index < elite_count {
                 continue;
             }
 
@@ -473,18 +474,12 @@ impl GeneticAlgorithm {
 
         let elite_ratio = normalize_unit_interval(elite_ratio, self.elite_ratio);
 
-        let elite_count = ((self.target_population_size as f32) * elite_ratio).round() as usize;
-        let elite_count = elite_count
-            .min(self.target_population_size)
-            .min(self.population.len());
-
-        if elite_count > 0 {
-            let nth_elite_index = elite_count - 1;
-            self.population
-                .select_nth_unstable_by_key(nth_elite_index, |chromosome| {
-                    chromosome.get_conflicts_sum()
-                });
-        }
+        let elite_count = elite_count_for_population(
+            self.target_population_size,
+            self.population.len(),
+            elite_ratio,
+        );
+        select_elites_to_front(&mut self.population, elite_count);
 
         let mut survivors = self.population.drain(..elite_count).collect::<Vec<_>>();
 
@@ -576,6 +571,33 @@ fn offspring_count_for_population(target_population_size: usize, offspring_ratio
     ((target_population_size as f64) * f64::from(offspring_ratio))
         .round()
         .max(1.0) as usize
+}
+
+fn elite_count_for_population(
+    target_population_size: usize,
+    population_size: usize,
+    elite_ratio: f32,
+) -> usize {
+    if target_population_size == 0
+        || population_size == 0
+        || elite_ratio <= 0.0
+        || !elite_ratio.is_finite()
+    {
+        return 0;
+    }
+
+    let elite_count = ((target_population_size as f32) * elite_ratio).round() as usize;
+    elite_count.min(target_population_size).min(population_size)
+}
+
+fn select_elites_to_front(population: &mut [Chromosome], elite_count: usize) {
+    if elite_count == 0 || population.is_empty() {
+        return;
+    }
+
+    let nth_elite_index = elite_count.saturating_sub(1).min(population.len() - 1);
+    population
+        .select_nth_unstable_by_key(nth_elite_index, |chromosome| chromosome.get_conflicts_sum());
 }
 
 fn cumulative_fitness(population: &[Chromosome]) -> Vec<f32> {
@@ -883,6 +905,17 @@ mod tests {
     }
 
     #[test]
+    fn test_elite_count_scales_with_target_population() {
+        assert_eq!(
+            super::elite_count_for_population(40_000, 44_000, 0.10),
+            4_000
+        );
+        assert_eq!(super::elite_count_for_population(10, 12, 0.15), 2);
+        assert_eq!(super::elite_count_for_population(10, 12, 0.0), 0);
+        assert_eq!(super::elite_count_for_population(10, 1, 0.50), 1);
+    }
+
+    #[test]
     fn test_mate_random_chromosomes_uses_offspring_count() {
         let population = (0..8)
             .map(|seed| Chromosome::new(shuffled_values(8, seed)))
@@ -893,6 +926,32 @@ mod tests {
         genetic_algorithm.mate_random_chromosomes(3);
 
         assert_eq!(genetic_algorithm.get_population_size(), 11);
+    }
+
+    #[test]
+    fn test_mutation_preserves_configured_elite_set() {
+        let solution = vec![0, 4, 7, 5, 2, 6, 1, 3];
+        let low_conflict = vec![0, 2, 4, 6, 1, 3, 5, 7];
+        let high_conflict = vec![0, 1, 2, 3, 4, 5, 6, 7];
+        let higher_conflict = vec![7, 6, 5, 4, 3, 2, 1, 0];
+        let population = vec![
+            Chromosome::new(high_conflict),
+            Chromosome::new(solution.clone()),
+            Chromosome::new(higher_conflict),
+            Chromosome::new(low_conflict.clone()),
+        ];
+
+        let mut genetic_algorithm = build_test_algorithm(population);
+        genetic_algorithm.mutate_population(1.0, 0.50);
+
+        let positions = genetic_algorithm
+            .population
+            .iter()
+            .map(|chromosome| chromosome.get_positions().to_vec())
+            .collect::<Vec<_>>();
+
+        assert!(positions.contains(&solution));
+        assert!(positions.contains(&low_conflict));
     }
 
     #[test]
