@@ -39,6 +39,10 @@ If `--seed` is omitted, a random seed is generated and logged.
 
 Tune `--offspring-ratio` to control GA turnover. For example, `0.10` creates offspring equal to 10% of the target population before survivor selection.
 
+## Library configuration
+
+Use `GaConfig::validated()` or `GaConfig::try_new()` to get explicit errors for invalid public configuration values.
+
 ## Development checks
 
 ```bash

@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{error::Error, fmt, time::Instant};
 
 use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
 use rayon::prelude::*;
@@ -101,6 +101,41 @@ pub struct GaConfig {
     pub offspring_ratio: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GaConfigError {
+    BoardSizeZero,
+    InitialPopulationZero,
+    MaxEpochCountZero,
+    InvalidMutationRate,
+    InvalidEliteRatio,
+    InvalidOffspringRatio,
+}
+
+impl fmt::Display for GaConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BoardSizeZero => formatter.write_str("board size must be greater than 0"),
+            Self::InitialPopulationZero => {
+                formatter.write_str("initial population must be greater than 0")
+            }
+            Self::MaxEpochCountZero => {
+                formatter.write_str("max epoch count must be greater than 0")
+            }
+            Self::InvalidMutationRate => {
+                formatter.write_str("mutation rate must be finite and between 0.0 and 1.0")
+            }
+            Self::InvalidEliteRatio => {
+                formatter.write_str("elite ratio must be finite and between 0.0 and 1.0")
+            }
+            Self::InvalidOffspringRatio => {
+                formatter.write_str("offspring ratio must be finite and between 0.0 and 1.0")
+            }
+        }
+    }
+}
+
+impl Error for GaConfigError {}
+
 impl GaConfig {
     pub fn new(size: u16, initial_population: usize, max_epoch_count: u32, seed: u64) -> Self {
         Self {
@@ -112,6 +147,15 @@ impl GaConfig {
             elite_ratio: DEFAULT_ELITE_RATIO,
             offspring_ratio: DEFAULT_OFFSPRING_RATIO,
         }
+    }
+
+    pub fn try_new(
+        size: u16,
+        initial_population: usize,
+        max_epoch_count: u32,
+        seed: u64,
+    ) -> Result<Self, GaConfigError> {
+        Self::new(size, initial_population, max_epoch_count, seed).validated()
     }
 
     pub fn with_mutation_rate(mut self, mutation_rate: f32) -> Self {
@@ -127,6 +171,39 @@ impl GaConfig {
     pub fn with_offspring_ratio(mut self, offspring_ratio: f32) -> Self {
         self.offspring_ratio = offspring_ratio;
         self
+    }
+
+    pub fn validated(self) -> Result<Self, GaConfigError> {
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn validate(&self) -> Result<(), GaConfigError> {
+        if self.size == 0 {
+            return Err(GaConfigError::BoardSizeZero);
+        }
+
+        if self.initial_population == 0 {
+            return Err(GaConfigError::InitialPopulationZero);
+        }
+
+        if self.max_epoch_count == 0 {
+            return Err(GaConfigError::MaxEpochCountZero);
+        }
+
+        if !is_unit_interval(self.mutation_rate) {
+            return Err(GaConfigError::InvalidMutationRate);
+        }
+
+        if !is_unit_interval(self.elite_ratio) {
+            return Err(GaConfigError::InvalidEliteRatio);
+        }
+
+        if !is_unit_interval(self.offspring_ratio) {
+            return Err(GaConfigError::InvalidOffspringRatio);
+        }
+
+        Ok(())
     }
 }
 
@@ -614,6 +691,10 @@ fn cumulative_fitness(population: &[Chromosome]) -> Vec<f32> {
         .collect()
 }
 
+fn is_unit_interval(value: f32) -> bool {
+    value.is_finite() && (0.0..=1.0).contains(&value)
+}
+
 fn normalize_unit_interval(value: f32, fallback: f32) -> f32 {
     if value.is_finite() {
         value.clamp(0.0, 1.0)
@@ -778,7 +859,7 @@ mod tests {
 
     use super::{
         DEFAULT_ELITE_RATIO, DEFAULT_MUTATION_RATE, DEFAULT_OFFSPRING_RATIO, GaConfig,
-        GeneticAlgorithm, build_genetic_algorithm, chromosome::Chromosome, pmx,
+        GaConfigError, GeneticAlgorithm, build_genetic_algorithm, chromosome::Chromosome, pmx,
     };
 
     fn build_test_algorithm(population: Vec<Chromosome>) -> GeneticAlgorithm {
@@ -800,6 +881,55 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(seed);
         values.shuffle(&mut rng);
         values
+    }
+
+    #[test]
+    fn test_config_validation_accepts_valid_config() {
+        let config = GaConfig::try_new(8, 32, 100, 42)
+            .expect("valid default config should pass validation")
+            .with_mutation_rate(0.25)
+            .with_elite_ratio(0.20)
+            .with_offspring_ratio(0.50)
+            .validated()
+            .expect("valid customized config should pass validation");
+
+        assert_eq!(config.size, 8);
+        assert_eq!(config.initial_population, 32);
+        assert_eq!(config.max_epoch_count, 100);
+    }
+
+    #[test]
+    fn test_config_validation_rejects_invalid_config() {
+        assert_eq!(
+            GaConfig::new(0, 32, 100, 42).validate(),
+            Err(GaConfigError::BoardSizeZero)
+        );
+        assert_eq!(
+            GaConfig::new(8, 0, 100, 42).validate(),
+            Err(GaConfigError::InitialPopulationZero)
+        );
+        assert_eq!(
+            GaConfig::new(8, 32, 0, 42).validate(),
+            Err(GaConfigError::MaxEpochCountZero)
+        );
+        assert_eq!(
+            GaConfig::new(8, 32, 100, 42)
+                .with_mutation_rate(f32::NAN)
+                .validate(),
+            Err(GaConfigError::InvalidMutationRate)
+        );
+        assert_eq!(
+            GaConfig::new(8, 32, 100, 42)
+                .with_elite_ratio(1.1)
+                .validate(),
+            Err(GaConfigError::InvalidEliteRatio)
+        );
+        assert_eq!(
+            GaConfig::new(8, 32, 100, 42)
+                .with_offspring_ratio(-0.1)
+                .validate(),
+            Err(GaConfigError::InvalidOffspringRatio)
+        );
     }
 
     #[test]

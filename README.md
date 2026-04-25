@@ -41,11 +41,12 @@ Tune `--offspring-ratio` to control GA turnover. For example, `0.10` creates off
 ```rust
 use n_queens_problem::ga::{self, GaConfig};
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = GaConfig::new(18, 40_000, 5_000, 42)
         .with_mutation_rate(0.08)
         .with_elite_ratio(0.10)
-        .with_offspring_ratio(0.10);
+        .with_offspring_ratio(0.10)
+        .validated()?;
 
     let mut algorithm = ga::build_genetic_algorithm(config);
     let metrics = algorithm.run_algorithm();
@@ -55,8 +56,12 @@ fn main() {
         algorithm.get_best_chromosome().get_conflicts_sum()
     );
     println!("solved epoch: {:?}", metrics.solved_epoch());
+
+    Ok(())
 }
 ```
+
+Use `GaConfig::validated()` or `GaConfig::try_new()` to get explicit errors for invalid public configuration values.
 
 ## Docs site (Astro)
 

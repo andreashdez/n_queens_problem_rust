@@ -209,6 +209,21 @@ fn main() {
     let seed = run_config
         .seed
         .unwrap_or_else(|| rand::rng().random::<u64>());
+    let ga_config = ga::GaConfig::new(
+        run_config.board_size,
+        run_config.population_size,
+        run_config.max_epochs,
+        seed,
+    )
+    .with_mutation_rate(run_config.mutation_rate)
+    .with_elite_ratio(run_config.elite_ratio)
+    .with_offspring_ratio(run_config.offspring_ratio)
+    .validated()
+    .unwrap_or_else(|error| {
+        eprintln!("invalid GA config: {error}");
+        process::exit(2);
+    });
+
     log::info!(
         "start n_queens_problem board_size={} population={} epochs={} seed={seed} mutation_rate={} elite_ratio={} offspring_ratio={} draw_board={}",
         run_config.board_size,
@@ -219,16 +234,6 @@ fn main() {
         run_config.offspring_ratio,
         run_config.draw_board,
     );
-
-    let ga_config = ga::GaConfig::new(
-        run_config.board_size,
-        run_config.population_size,
-        run_config.max_epochs,
-        seed,
-    )
-    .with_mutation_rate(run_config.mutation_rate)
-    .with_elite_ratio(run_config.elite_ratio)
-    .with_offspring_ratio(run_config.offspring_ratio);
 
     let mut genetic_algorithm = ga::build_genetic_algorithm(ga_config);
 
