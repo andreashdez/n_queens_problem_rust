@@ -7,7 +7,7 @@ use n_queens_problem::ga::{self, GaConfig};
 #[command(name = "parameter_sweep")]
 #[command(about = "Run N-Queens GA parameter sweeps across multiple seeds")]
 #[command(
-    after_help = "Example:\n  cargo run --release --example parameter_sweep -- --sizes 18 --populations 40000 --epochs 5000 --seeds 20 --mutation-rates 0.06,0.08 --elite-ratios 0.05,0.10 --offspring-ratios 0.05,0.10"
+    after_help = "Example:\n  cargo run --release --example parameter_sweep -- --sizes 18 --populations 40000 --epochs 5000 --seeds 20 --mutation-rates 0.06,0.08 --elite-ratios 0.05,0.10 --offspring-ratios 0.05,0.10 --min-diversity-ratios 0.05,0.10"
 )]
 struct SweepConfig {
     #[arg(
@@ -80,6 +80,15 @@ struct SweepConfig {
         help = "Offspring ratios to test"
     )]
     offspring_ratios: Vec<f32>,
+    #[arg(
+        long = "min-diversity-ratios",
+        value_name = "RATIO[,RATIO]",
+        value_delimiter = ',',
+        default_value = "0.10",
+        value_parser = parse_unit_interval,
+        help = "Minimum diversity ratios to test"
+    )]
+    min_diversity_ratios: Vec<f32>,
 }
 
 struct SweepRun {
@@ -96,6 +105,7 @@ struct SweepCase {
     mutation_rate: f32,
     elite_ratio: f32,
     offspring_ratio: f32,
+    min_diversity_ratio: f32,
 }
 
 fn parse_positive_u16(raw_value: &str) -> Result<u16, String> {
@@ -160,6 +170,7 @@ fn run_single_seed(case: SweepCase, seed: u64) -> Result<SweepRun, ga::GaConfigE
         .with_mutation_rate(case.mutation_rate)
         .with_elite_ratio(case.elite_ratio)
         .with_offspring_ratio(case.offspring_ratio)
+        .with_min_diversity_ratio(case.min_diversity_ratio)
         .validated()?;
 
     let started_at = Instant::now();
@@ -231,13 +242,14 @@ fn print_summary(case: SweepCase, runs: &[SweepRun]) {
     let mutation_rate = case.mutation_rate;
     let elite_ratio = case.elite_ratio;
     let offspring_ratio = case.offspring_ratio;
+    let min_diversity_ratio = case.min_diversity_ratio;
     let seed_count = runs.len();
     let median_solved_epoch = format_optional(median_u32(&mut solved_epochs));
     let median_elapsed_ms = format_optional(median_u128(&mut elapsed_values));
     let best_conflicts_median = format_optional(median_u32(&mut best_conflicts));
 
     println!(
-        "{size},{population},{epochs},{mutation_rate:.6},{elite_ratio:.6},{offspring_ratio:.6},{seed_count},{solved_count},{solve_rate:.3},{median_solved_epoch},{median_elapsed_ms},{total_elapsed_ms},{best_conflicts_median},{best_conflicts_min}",
+        "{size},{population},{epochs},{mutation_rate:.6},{elite_ratio:.6},{offspring_ratio:.6},{min_diversity_ratio:.6},{seed_count},{solved_count},{solve_rate:.3},{median_solved_epoch},{median_elapsed_ms},{total_elapsed_ms},{best_conflicts_median},{best_conflicts_min}",
     );
 }
 
@@ -245,7 +257,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let sweep_config = SweepConfig::parse();
 
     println!(
-        "size,population,epochs,mutation_rate,elite_ratio,offspring_ratio,seeds,solved,solve_rate,median_solved_epoch,median_elapsed_ms,total_elapsed_ms,best_conflicts_median,best_conflicts_min"
+        "size,population,epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,seeds,solved,solve_rate,median_solved_epoch,median_elapsed_ms,total_elapsed_ms,best_conflicts_median,best_conflicts_min"
     );
 
     for &size in &sweep_config.sizes {
@@ -254,22 +266,26 @@ fn main() -> Result<(), Box<dyn Error>> {
                 for &mutation_rate in &sweep_config.mutation_rates {
                     for &elite_ratio in &sweep_config.elite_ratios {
                         for &offspring_ratio in &sweep_config.offspring_ratios {
-                            let case = SweepCase {
-                                size,
-                                population,
-                                epochs,
-                                mutation_rate,
-                                elite_ratio,
-                                offspring_ratio,
-                            };
-                            let mut runs = Vec::with_capacity(sweep_config.seed_count);
-                            for seed_offset in 0..sweep_config.seed_count {
-                                let seed = seed_for_offset(sweep_config.seed_start, seed_offset)?;
-                                let run = run_single_seed(case, seed)?;
-                                runs.push(run);
-                            }
+                            for &min_diversity_ratio in &sweep_config.min_diversity_ratios {
+                                let case = SweepCase {
+                                    size,
+                                    population,
+                                    epochs,
+                                    mutation_rate,
+                                    elite_ratio,
+                                    offspring_ratio,
+                                    min_diversity_ratio,
+                                };
+                                let mut runs = Vec::with_capacity(sweep_config.seed_count);
+                                for seed_offset in 0..sweep_config.seed_count {
+                                    let seed =
+                                        seed_for_offset(sweep_config.seed_start, seed_offset)?;
+                                    let run = run_single_seed(case, seed)?;
+                                    runs.push(run);
+                                }
 
-                            print_summary(case, &runs);
+                                print_summary(case, &runs);
+                            }
                         }
                     }
                 }

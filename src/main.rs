@@ -17,6 +17,7 @@ const DEFAULT_MAX_EPOCHS: u32 = 5_000;
 const DEFAULT_MUTATION_RATE: f32 = ga::DEFAULT_MUTATION_RATE;
 const DEFAULT_ELITE_RATIO: f32 = ga::DEFAULT_ELITE_RATIO;
 const DEFAULT_OFFSPRING_RATIO: f32 = ga::DEFAULT_OFFSPRING_RATIO;
+const DEFAULT_MIN_DIVERSITY_RATIO: f32 = ga::DEFAULT_MIN_DIVERSITY_RATIO;
 
 #[derive(Debug, Parser)]
 #[command(name = "n_queens_problem")]
@@ -87,6 +88,14 @@ struct RunConfig {
     )]
     offspring_ratio: f32,
     #[arg(
+        long = "min-diversity-ratio",
+        value_name = "0..1",
+        default_value_t = DEFAULT_MIN_DIVERSITY_RATIO,
+        value_parser = parse_unit_interval,
+        help = "Minimum unique-chromosome ratio before random refresh"
+    )]
+    min_diversity_ratio: f32,
+    #[arg(
         long = "no-board",
         action = ArgAction::SetFalse,
         default_value_t = true,
@@ -129,6 +138,10 @@ fn chromosome_json(chromosome: &ga::chromosome::Chromosome) -> serde_json::Value
     })
 }
 
+fn json_ratio(value: f32) -> f64 {
+    (f64::from(value) * 1_000_000.0).round() / 1_000_000.0
+}
+
 fn print_run_summary_json(
     run_config: &RunConfig,
     seed: u64,
@@ -138,15 +151,22 @@ fn print_run_summary_json(
     final_population: usize,
     metrics_csv: Option<&Path>,
 ) -> Result<(), String> {
+    let final_epoch = run_metrics.epochs().last();
     let summary = json!({
         "seed": seed,
         "board_size": run_config.board_size,
         "target_population": run_config.population_size,
         "max_epochs": run_config.max_epochs,
-        "mutation_rate": run_config.mutation_rate,
-        "elite_ratio": run_config.elite_ratio,
-        "offspring_ratio": run_config.offspring_ratio,
+        "mutation_rate": json_ratio(run_config.mutation_rate),
+        "elite_ratio": json_ratio(run_config.elite_ratio),
+        "offspring_ratio": json_ratio(run_config.offspring_ratio),
+        "min_diversity_ratio": json_ratio(run_config.min_diversity_ratio),
         "final_population": final_population,
+        "final_unique_chromosomes": final_epoch.map(|metrics| metrics.unique_chromosomes()),
+        "final_diversity_ratio": final_epoch.map(|metrics| json_ratio(metrics.diversity_ratio())),
+        "last_diversity_replacements": final_epoch
+            .map(|metrics| metrics.diversity_replacements())
+            .unwrap_or_default(),
         "elapsed_ms": run_metrics.total_elapsed_ms(),
         "solved_epoch": run_metrics.solved_epoch(),
         "metrics_csv": metrics_csv.map(|path| path.display().to_string()),
@@ -187,7 +207,7 @@ fn write_run_metrics_csv(
 
     writeln!(
         metrics_file,
-        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,epoch,best_conflicts_sum,population_size,elapsed_ms,average_conflicts_sum,unique_chromosomes,epoch_mutation_rate,epoch_elite_ratio,offspring_count,stagnation_epochs"
+        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,epoch,best_conflicts_sum,population_size,elapsed_ms,average_conflicts_sum,unique_chromosomes,diversity_ratio,epoch_mutation_rate,epoch_elite_ratio,offspring_count,stagnation_epochs,diversity_replacements"
     )
     .map_err(|error| {
         format!(
@@ -199,23 +219,26 @@ fn write_run_metrics_csv(
     for epoch_metrics in run_metrics.epochs() {
         writeln!(
             metrics_file,
-            "{seed},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{seed},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             run_config.board_size,
             run_config.population_size,
             run_config.max_epochs,
             run_config.mutation_rate,
             run_config.elite_ratio,
             run_config.offspring_ratio,
+            run_config.min_diversity_ratio,
             epoch_metrics.epoch(),
             epoch_metrics.best_conflicts_sum(),
             epoch_metrics.population_size(),
             epoch_metrics.elapsed_ms(),
             epoch_metrics.average_conflicts_sum(),
             epoch_metrics.unique_chromosomes(),
+            epoch_metrics.diversity_ratio(),
             epoch_metrics.mutation_rate(),
             epoch_metrics.elite_ratio(),
             epoch_metrics.offspring_count(),
             epoch_metrics.stagnation_epochs(),
+            epoch_metrics.diversity_replacements(),
         )
         .map_err(|error| {
             format!(
@@ -298,6 +321,7 @@ fn main() {
     .with_mutation_rate(run_config.mutation_rate)
     .with_elite_ratio(run_config.elite_ratio)
     .with_offspring_ratio(run_config.offspring_ratio)
+    .with_min_diversity_ratio(run_config.min_diversity_ratio)
     .validated()
     .unwrap_or_else(|error| {
         eprintln!("invalid GA config: {error}");
@@ -305,13 +329,14 @@ fn main() {
     });
 
     log::info!(
-        "start n_queens_problem board_size={} population={} epochs={} seed={seed} mutation_rate={} elite_ratio={} offspring_ratio={} draw_board={}",
+        "start n_queens_problem board_size={} population={} epochs={} seed={seed} mutation_rate={} elite_ratio={} offspring_ratio={} min_diversity_ratio={} draw_board={}",
         run_config.board_size,
         run_config.population_size,
         run_config.max_epochs,
         run_config.mutation_rate,
         run_config.elite_ratio,
         run_config.offspring_ratio,
+        run_config.min_diversity_ratio,
         run_config.draw_board,
     );
 

@@ -19,6 +19,7 @@ const MIN_ADAPTIVE_ELITE_RATIO_SCALE: f32 = 0.25;
 pub const DEFAULT_MUTATION_RATE: f32 = 0.08;
 pub const DEFAULT_ELITE_RATIO: f32 = 0.10;
 pub const DEFAULT_OFFSPRING_RATIO: f32 = 0.10;
+pub const DEFAULT_MIN_DIVERSITY_RATIO: f32 = 0.10;
 
 #[derive(Debug, Clone)]
 pub struct EpochMetrics {
@@ -32,6 +33,7 @@ pub struct EpochMetrics {
     elite_ratio: f32,
     offspring_count: usize,
     stagnation_epochs: u32,
+    diversity_replacements: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -40,6 +42,7 @@ struct EpochRecordContext {
     elite_ratio: f32,
     offspring_count: usize,
     stagnation_epochs: u32,
+    diversity_replacements: usize,
     elapsed_ms: u128,
 }
 
@@ -68,6 +71,14 @@ impl EpochMetrics {
         self.unique_chromosomes
     }
 
+    pub fn diversity_ratio(&self) -> f32 {
+        if self.population_size == 0 {
+            0.0
+        } else {
+            self.unique_chromosomes as f32 / self.population_size as f32
+        }
+    }
+
     pub fn mutation_rate(&self) -> f32 {
         self.mutation_rate
     }
@@ -82,6 +93,10 @@ impl EpochMetrics {
 
     pub fn stagnation_epochs(&self) -> u32 {
         self.stagnation_epochs
+    }
+
+    pub fn diversity_replacements(&self) -> usize {
+        self.diversity_replacements
     }
 }
 
@@ -120,6 +135,7 @@ impl RunMetrics {
             elite_ratio: context.elite_ratio,
             offspring_count: context.offspring_count,
             stagnation_epochs: context.stagnation_epochs,
+            diversity_replacements: context.diversity_replacements,
         });
     }
 
@@ -141,6 +157,7 @@ pub struct GaConfig {
     pub mutation_rate: f32,
     pub elite_ratio: f32,
     pub offspring_ratio: f32,
+    pub min_diversity_ratio: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,6 +168,7 @@ pub enum GaConfigError {
     InvalidMutationRate,
     InvalidEliteRatio,
     InvalidOffspringRatio,
+    InvalidMinDiversityRatio,
 }
 
 impl fmt::Display for GaConfigError {
@@ -172,6 +190,8 @@ impl fmt::Display for GaConfigError {
             Self::InvalidOffspringRatio => {
                 formatter.write_str("offspring ratio must be finite and between 0.0 and 1.0")
             }
+            Self::InvalidMinDiversityRatio => formatter
+                .write_str("minimum diversity ratio must be finite and between 0.0 and 1.0"),
         }
     }
 }
@@ -188,6 +208,7 @@ impl GaConfig {
             mutation_rate: DEFAULT_MUTATION_RATE,
             elite_ratio: DEFAULT_ELITE_RATIO,
             offspring_ratio: DEFAULT_OFFSPRING_RATIO,
+            min_diversity_ratio: DEFAULT_MIN_DIVERSITY_RATIO,
         }
     }
 
@@ -212,6 +233,11 @@ impl GaConfig {
 
     pub fn with_offspring_ratio(mut self, offspring_ratio: f32) -> Self {
         self.offspring_ratio = offspring_ratio;
+        self
+    }
+
+    pub fn with_min_diversity_ratio(mut self, min_diversity_ratio: f32) -> Self {
+        self.min_diversity_ratio = min_diversity_ratio;
         self
     }
 
@@ -245,6 +271,10 @@ impl GaConfig {
             return Err(GaConfigError::InvalidOffspringRatio);
         }
 
+        if !is_unit_interval(self.min_diversity_ratio) {
+            return Err(GaConfigError::InvalidMinDiversityRatio);
+        }
+
         Ok(())
     }
 }
@@ -257,26 +287,30 @@ pub struct GeneticAlgorithm {
     mutation_rate: f32,
     elite_ratio: f32,
     offspring_ratio: f32,
+    min_diversity_ratio: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GeneticAlgorithmParams {
+    target_population_size: usize,
+    max_epoch_count: u32,
+    mutation_rate: f32,
+    elite_ratio: f32,
+    offspring_ratio: f32,
+    min_diversity_ratio: f32,
 }
 
 impl GeneticAlgorithm {
-    fn new(
-        population: Vec<Chromosome>,
-        target_population_size: usize,
-        max_epoch_count: u32,
-        rng: StdRng,
-        mutation_rate: f32,
-        elite_ratio: f32,
-        offspring_ratio: f32,
-    ) -> Self {
+    fn new(population: Vec<Chromosome>, rng: StdRng, params: GeneticAlgorithmParams) -> Self {
         Self {
             population,
-            target_population_size,
-            max_epoch_count,
+            target_population_size: params.target_population_size,
+            max_epoch_count: params.max_epoch_count,
             rng,
-            mutation_rate,
-            elite_ratio,
-            offspring_ratio,
+            mutation_rate: params.mutation_rate,
+            elite_ratio: params.elite_ratio,
+            offspring_ratio: params.offspring_ratio,
+            min_diversity_ratio: params.min_diversity_ratio,
         }
     }
 
@@ -306,6 +340,7 @@ impl GeneticAlgorithm {
                 elite_ratio: self.elite_ratio,
                 offspring_count,
                 stagnation_epochs: 0,
+                diversity_replacements: 0,
                 elapsed_ms: started_at.elapsed().as_millis(),
             },
         );
@@ -368,6 +403,11 @@ impl GeneticAlgorithm {
             self.select_survivors(epoch_elite_ratio);
             self.calc_fitness();
 
+            let diversity_replacements = self.refresh_low_diversity_population(epoch_elite_ratio);
+            if diversity_replacements > 0 {
+                self.calc_fitness();
+            }
+
             let epoch_best_conflicts_sum = self.get_best_chromosome().get_conflicts_sum();
             let population_size = self.get_population_size();
 
@@ -387,6 +427,7 @@ impl GeneticAlgorithm {
                     elite_ratio: epoch_elite_ratio,
                     offspring_count,
                     stagnation_epochs,
+                    diversity_replacements,
                     elapsed_ms: started_at.elapsed().as_millis(),
                 },
             );
@@ -411,7 +452,7 @@ impl GeneticAlgorithm {
             let is_last_epoch = epoch_number == self.max_epoch_count;
             if is_periodic_log || is_last_epoch {
                 log::info!(
-                    "ga progress epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} stagnant_epochs={stagnation_epochs} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4}",
+                    "ga progress epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} stagnant_epochs={stagnation_epochs} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4} diversity_replacements={diversity_replacements}",
                 );
             }
         }
@@ -627,6 +668,54 @@ impl GeneticAlgorithm {
         self.population = survivors;
     }
 
+    fn refresh_low_diversity_population(&mut self, elite_ratio: f32) -> usize {
+        if self.population.is_empty() || self.min_diversity_ratio <= 0.0 {
+            return 0;
+        }
+
+        let min_unique_chromosomes =
+            minimum_unique_chromosomes(self.target_population_size, self.min_diversity_ratio);
+        let unique_chromosomes = count_unique_chromosomes(&self.population);
+        if unique_chromosomes >= min_unique_chromosomes {
+            return 0;
+        }
+
+        let elite_ratio = normalize_unit_interval(elite_ratio, self.elite_ratio);
+        let elite_count = elite_count_for_population(
+            self.target_population_size,
+            self.population.len(),
+            elite_ratio,
+        );
+        let replaceable_count = self.population.len().saturating_sub(elite_count);
+        let replacement_count =
+            (min_unique_chromosomes - unique_chromosomes).min(replaceable_count);
+        if replacement_count == 0 {
+            return 0;
+        }
+
+        self.population
+            .sort_by_key(|chromosome| chromosome.get_conflicts_sum());
+
+        let board_size = self
+            .population
+            .first()
+            .map(|chromosome| chromosome.get_positions().len())
+            .unwrap_or(0);
+        let board_size = u16::try_from(board_size).expect("board size should fit into u16");
+
+        for chromosome in self.population.iter_mut().rev().take(replacement_count) {
+            let positions =
+                chromosome::generate_distinct_random_values_with_rng(board_size, &mut self.rng);
+            *chromosome = Chromosome::new(positions);
+        }
+
+        log::info!(
+            "ga diversity refresh unique_chromosomes={unique_chromosomes} min_unique_chromosomes={min_unique_chromosomes} replaced={replacement_count}"
+        );
+
+        replacement_count
+    }
+
     fn soft_restart_population(&mut self, elite_ratio: f32) -> usize {
         if self.population.is_empty() {
             return 0;
@@ -675,6 +764,8 @@ pub fn build_genetic_algorithm(config: GaConfig) -> GeneticAlgorithm {
     let mutation_rate = normalize_unit_interval(config.mutation_rate, DEFAULT_MUTATION_RATE);
     let elite_ratio = normalize_unit_interval(config.elite_ratio, DEFAULT_ELITE_RATIO);
     let offspring_ratio = normalize_unit_interval(config.offspring_ratio, DEFAULT_OFFSPRING_RATIO);
+    let min_diversity_ratio =
+        normalize_unit_interval(config.min_diversity_ratio, DEFAULT_MIN_DIVERSITY_RATIO);
     let mut rng = StdRng::seed_from_u64(config.seed);
     let mut population: Vec<Chromosome> = Vec::with_capacity(target_population_size);
 
@@ -686,12 +777,15 @@ pub fn build_genetic_algorithm(config: GaConfig) -> GeneticAlgorithm {
 
     GeneticAlgorithm::new(
         population,
-        target_population_size,
-        config.max_epoch_count,
         rng,
-        mutation_rate,
-        elite_ratio,
-        offspring_ratio,
+        GeneticAlgorithmParams {
+            target_population_size,
+            max_epoch_count: config.max_epoch_count,
+            mutation_rate,
+            elite_ratio,
+            offspring_ratio,
+            min_diversity_ratio,
+        },
     )
 }
 
@@ -726,6 +820,28 @@ fn population_metrics(population: &[Chromosome]) -> (u32, f32, usize) {
         total_conflicts_sum as f32 / population.len() as f32,
         unique_chromosomes.len(),
     )
+}
+
+fn count_unique_chromosomes(population: &[Chromosome]) -> usize {
+    population
+        .iter()
+        .map(|chromosome| chromosome.get_positions())
+        .collect::<HashSet<_>>()
+        .len()
+}
+
+fn minimum_unique_chromosomes(target_population_size: usize, min_diversity_ratio: f32) -> usize {
+    if target_population_size == 0 || min_diversity_ratio <= 0.0 || !min_diversity_ratio.is_finite()
+    {
+        return 0;
+    }
+
+    let minimum = ((target_population_size as f32) * min_diversity_ratio).ceil() as usize;
+    if target_population_size > 1 {
+        minimum.max(2).min(target_population_size)
+    } else {
+        minimum.max(1)
+    }
 }
 
 fn elite_count_for_population(
@@ -936,20 +1052,24 @@ mod tests {
     use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 
     use super::{
-        DEFAULT_ELITE_RATIO, DEFAULT_MUTATION_RATE, DEFAULT_OFFSPRING_RATIO, GaConfig,
-        GaConfigError, GeneticAlgorithm, build_genetic_algorithm, chromosome::Chromosome, pmx,
+        DEFAULT_ELITE_RATIO, DEFAULT_MIN_DIVERSITY_RATIO, DEFAULT_MUTATION_RATE,
+        DEFAULT_OFFSPRING_RATIO, GaConfig, GaConfigError, GeneticAlgorithm, GeneticAlgorithmParams,
+        build_genetic_algorithm, chromosome::Chromosome, pmx,
     };
 
     fn build_test_algorithm(population: Vec<Chromosome>) -> GeneticAlgorithm {
         let target_population_size = population.len().max(1);
         GeneticAlgorithm::new(
             population,
-            target_population_size,
-            10,
             StdRng::seed_from_u64(7),
-            DEFAULT_MUTATION_RATE,
-            DEFAULT_ELITE_RATIO,
-            DEFAULT_OFFSPRING_RATIO,
+            GeneticAlgorithmParams {
+                target_population_size,
+                max_epoch_count: 10,
+                mutation_rate: DEFAULT_MUTATION_RATE,
+                elite_ratio: DEFAULT_ELITE_RATIO,
+                offspring_ratio: DEFAULT_OFFSPRING_RATIO,
+                min_diversity_ratio: DEFAULT_MIN_DIVERSITY_RATIO,
+            },
         )
     }
 
@@ -968,12 +1088,14 @@ mod tests {
             .with_mutation_rate(0.25)
             .with_elite_ratio(0.20)
             .with_offspring_ratio(0.50)
+            .with_min_diversity_ratio(0.15)
             .validated()
             .expect("valid customized config should pass validation");
 
         assert_eq!(config.size, 8);
         assert_eq!(config.initial_population, 32);
         assert_eq!(config.max_epoch_count, 100);
+        assert_eq!(config.min_diversity_ratio, 0.15);
     }
 
     #[test]
@@ -1007,6 +1129,12 @@ mod tests {
                 .with_offspring_ratio(-0.1)
                 .validate(),
             Err(GaConfigError::InvalidOffspringRatio)
+        );
+        assert_eq!(
+            GaConfig::new(8, 32, 100, 42)
+                .with_min_diversity_ratio(1.1)
+                .validate(),
+            Err(GaConfigError::InvalidMinDiversityRatio)
         );
     }
 
@@ -1082,6 +1210,7 @@ mod tests {
         assert!(run_metrics.total_elapsed_ms() >= initial_epoch.elapsed_ms());
         assert!(initial_epoch.average_conflicts_sum() >= initial_epoch.best_conflicts_sum() as f32);
         assert!(initial_epoch.unique_chromosomes() > 0);
+        assert!(initial_epoch.diversity_ratio() > 0.0);
         assert_eq!(initial_epoch.mutation_rate(), DEFAULT_MUTATION_RATE);
         assert_eq!(initial_epoch.elite_ratio(), DEFAULT_ELITE_RATIO);
         assert_eq!(
@@ -1089,6 +1218,7 @@ mod tests {
             super::offspring_count_for_population(32, DEFAULT_OFFSPRING_RATIO)
         );
         assert_eq!(initial_epoch.stagnation_epochs(), 0);
+        assert_eq!(initial_epoch.diversity_replacements(), 0);
     }
 
     #[test]
@@ -1110,6 +1240,7 @@ mod tests {
         assert_eq!(first_epoch.elite_ratio(), 0.25);
         assert_eq!(first_epoch.offspring_count(), 0);
         assert_eq!(first_epoch.stagnation_epochs(), 1);
+        assert_eq!(first_epoch.diversity_replacements(), 0);
         assert!(first_epoch.average_conflicts_sum() >= first_epoch.best_conflicts_sum() as f32);
         assert!(first_epoch.unique_chromosomes() > 0);
 
@@ -1178,6 +1309,15 @@ mod tests {
     }
 
     #[test]
+    fn test_minimum_unique_chromosomes_scales_with_population() {
+        assert_eq!(super::minimum_unique_chromosomes(0, 0.10), 0);
+        assert_eq!(super::minimum_unique_chromosomes(1, 0.10), 1);
+        assert_eq!(super::minimum_unique_chromosomes(8, 0.10), 2);
+        assert_eq!(super::minimum_unique_chromosomes(40_000, 0.10), 4_000);
+        assert_eq!(super::minimum_unique_chromosomes(10, 0.0), 0);
+    }
+
+    #[test]
     fn test_mate_random_chromosomes_uses_offspring_count() {
         let population = (0..8)
             .map(|seed| Chromosome::new(shuffled_values(8, seed)))
@@ -1217,6 +1357,39 @@ mod tests {
     }
 
     #[test]
+    fn test_diversity_refresh_preserves_elite_and_replaces_non_elites() {
+        let solution = vec![0, 4, 7, 5, 2, 6, 1, 3];
+        let duplicate = vec![0, 1, 2, 3, 4, 5, 6, 7];
+
+        let mut population = vec![Chromosome::new(solution.clone())];
+        population.extend((0..7).map(|_| Chromosome::new(duplicate.clone())));
+
+        let mut genetic_algorithm = GeneticAlgorithm::new(
+            population,
+            StdRng::seed_from_u64(7),
+            GeneticAlgorithmParams {
+                target_population_size: 8,
+                max_epoch_count: 10,
+                mutation_rate: DEFAULT_MUTATION_RATE,
+                elite_ratio: 0.25,
+                offspring_ratio: DEFAULT_OFFSPRING_RATIO,
+                min_diversity_ratio: 0.50,
+            },
+        );
+
+        let replaced_count = genetic_algorithm.refresh_low_diversity_population(0.25);
+        let positions = genetic_algorithm
+            .population
+            .iter()
+            .map(|chromosome| chromosome.get_positions().to_vec())
+            .collect::<Vec<_>>();
+
+        assert_eq!(replaced_count, 2);
+        assert!(positions.contains(&solution));
+        assert!(super::count_unique_chromosomes(&genetic_algorithm.population) >= 2);
+    }
+
+    #[test]
     fn test_soft_restart_keeps_best_chromosome_and_refills_population() {
         let solution = vec![0, 4, 7, 5, 2, 6, 1, 3];
         let non_solution = vec![0, 1, 2, 3, 4, 5, 6, 7];
@@ -1226,12 +1399,15 @@ mod tests {
 
         let mut genetic_algorithm = GeneticAlgorithm::new(
             population,
-            10,
-            10,
             StdRng::seed_from_u64(7),
-            DEFAULT_MUTATION_RATE,
-            DEFAULT_ELITE_RATIO,
-            DEFAULT_OFFSPRING_RATIO,
+            GeneticAlgorithmParams {
+                target_population_size: 10,
+                max_epoch_count: 10,
+                mutation_rate: DEFAULT_MUTATION_RATE,
+                elite_ratio: DEFAULT_ELITE_RATIO,
+                offspring_ratio: DEFAULT_OFFSPRING_RATIO,
+                min_diversity_ratio: DEFAULT_MIN_DIVERSITY_RATIO,
+            },
         );
 
         let replaced_count = genetic_algorithm.soft_restart_population(DEFAULT_ELITE_RATIO);
@@ -1252,12 +1428,15 @@ mod tests {
 
         let mut genetic_algorithm = GeneticAlgorithm::new(
             population,
-            4,
-            10,
             StdRng::seed_from_u64(7),
-            DEFAULT_MUTATION_RATE,
-            1.0,
-            DEFAULT_OFFSPRING_RATIO,
+            GeneticAlgorithmParams {
+                target_population_size: 4,
+                max_epoch_count: 10,
+                mutation_rate: DEFAULT_MUTATION_RATE,
+                elite_ratio: 1.0,
+                offspring_ratio: DEFAULT_OFFSPRING_RATIO,
+                min_diversity_ratio: DEFAULT_MIN_DIVERSITY_RATIO,
+            },
         );
 
         let replaced_count = genetic_algorithm.soft_restart_population(1.0);
