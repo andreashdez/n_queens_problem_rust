@@ -5,6 +5,11 @@ pub fn draw_board(positions: &[u16], conflicts: &[u32]) {
         return;
     }
 
+    if size > 30 {
+        println!("(board too large to print)");
+        return;
+    }
+
     draw_top_row(size);
     for y in 0..size {
         print!("║ ");
