@@ -192,6 +192,10 @@ fn cli_accepts_tournament_selection() {
         "tournament",
         "--tournament-size",
         "4",
+        "--local-search-rate",
+        "0.50",
+        "--local-search-attempts",
+        "4",
         "--no-board",
     ]);
 
@@ -247,8 +251,11 @@ fn json_mode_emits_machine_readable_summary() {
     assert_eq!(summary["min_diversity_ratio"], 0.1);
     assert_eq!(summary["selection_strategy"], "roulette");
     assert_eq!(summary["tournament_size"], 3);
+    assert_eq!(summary["local_search_rate"], 0.0);
+    assert_eq!(summary["local_search_attempts"], 8);
     assert!(summary["final_unique_chromosomes"].is_number());
     assert!(summary["final_diversity_ratio"].is_number());
+    assert!(summary["last_local_search_improvements"].is_number());
     assert!(summary["last_diversity_replacements"].is_number());
     assert_eq!(summary["metrics_csv"], metrics_path_string);
     assert!(summary["elapsed_ms"].is_number());
@@ -298,13 +305,13 @@ fn metrics_csv_contains_run_configuration_and_epochs() {
     let lines = csv.lines().collect::<Vec<_>>();
     assert_eq!(
         lines[0],
-        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,epoch,best_conflicts_sum,population_size,elapsed_ms,average_conflicts_sum,unique_chromosomes,diversity_ratio,epoch_mutation_rate,epoch_elite_ratio,offspring_count,stagnation_epochs,diversity_replacements"
+        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,local_search_rate,local_search_attempts,epoch,best_conflicts_sum,population_size,elapsed_ms,average_conflicts_sum,unique_chromosomes,diversity_ratio,epoch_mutation_rate,epoch_elite_ratio,offspring_count,local_search_improvements,stagnation_epochs,diversity_replacements"
     );
     assert_eq!(lines.len(), 4);
-    assert!(lines[1].starts_with("42,4,8,2,0,0.25,0,0.1,roulette,3,0,"));
-    assert!(lines[2].starts_with("42,4,8,2,0,0.25,0,0.1,roulette,3,1,"));
-    assert!(lines[3].starts_with("42,4,8,2,0,0.25,0,0.1,roulette,3,2,"));
-    assert_eq!(lines[1].split(',').count(), 22);
+    assert!(lines[1].starts_with("42,4,8,2,0,0.25,0,0.1,roulette,3,0,8,0,"));
+    assert!(lines[2].starts_with("42,4,8,2,0,0.25,0,0.1,roulette,3,0,8,1,"));
+    assert!(lines[3].starts_with("42,4,8,2,0,0.25,0,0.1,roulette,3,0,8,2,"));
+    assert_eq!(lines[1].split(',').count(), 25);
 }
 
 #[test]

@@ -7,7 +7,7 @@ use n_queens_problem::ga::{self, GaConfig};
 #[command(name = "parameter_sweep")]
 #[command(about = "Run N-Queens GA parameter sweeps across multiple seeds")]
 #[command(
-    after_help = "Example:\n  cargo run --release --example parameter_sweep -- --sizes 18 --populations 40000 --epochs 5000 --seeds 20 --mutation-rates 0.06,0.08 --elite-ratios 0.05,0.10 --offspring-ratios 0.05,0.10 --min-diversity-ratios 0.05,0.10 --selection-strategies roulette,tournament --tournament-sizes 3,5"
+    after_help = "Example:\n  cargo run --release --example parameter_sweep -- --sizes 18 --populations 40000 --epochs 5000 --seeds 20 --mutation-rates 0.06,0.08 --elite-ratios 0.05,0.10 --offspring-ratios 0.05,0.10 --min-diversity-ratios 0.05,0.10 --selection-strategies roulette,tournament --tournament-sizes 3,5 --local-search-rates 0,0.05 --local-search-attempts 8"
 )]
 struct SweepConfig {
     #[arg(
@@ -107,6 +107,24 @@ struct SweepConfig {
         help = "Tournament sizes to test"
     )]
     tournament_sizes: Vec<usize>,
+    #[arg(
+        long = "local-search-rates",
+        value_name = "RATE[,RATE]",
+        value_delimiter = ',',
+        default_value = "0",
+        value_parser = parse_unit_interval,
+        help = "Local-search rates to test"
+    )]
+    local_search_rates: Vec<f32>,
+    #[arg(
+        long = "local-search-attempts",
+        value_name = "COUNT[,COUNT]",
+        value_delimiter = ',',
+        default_value = "8",
+        value_parser = parse_usize,
+        help = "Local-search swap-attempt counts to test"
+    )]
+    local_search_attempts: Vec<usize>,
 }
 
 struct SweepRun {
@@ -126,6 +144,8 @@ struct SweepCase {
     min_diversity_ratio: f32,
     selection_strategy: ga::SelectionStrategy,
     tournament_size: usize,
+    local_search_rate: f32,
+    local_search_attempts: usize,
 }
 
 fn parse_positive_u16(raw_value: &str) -> Result<u16, String> {
@@ -150,6 +170,12 @@ fn parse_positive_usize(raw_value: &str) -> Result<usize, String> {
     }
 
     Ok(value)
+}
+
+fn parse_usize(raw_value: &str) -> Result<usize, String> {
+    raw_value
+        .parse::<usize>()
+        .map_err(|err| format!("invalid value `{raw_value}`: {err}"))
 }
 
 fn parse_positive_u32(raw_value: &str) -> Result<u32, String> {
@@ -201,6 +227,8 @@ fn run_single_seed(case: SweepCase, seed: u64) -> Result<SweepRun, ga::GaConfigE
         .with_min_diversity_ratio(case.min_diversity_ratio)
         .with_selection_strategy(case.selection_strategy)
         .with_tournament_size(case.tournament_size)
+        .with_local_search_rate(case.local_search_rate)
+        .with_local_search_attempts(case.local_search_attempts)
         .validated()?;
 
     let started_at = Instant::now();
@@ -275,13 +303,15 @@ fn print_summary(case: SweepCase, runs: &[SweepRun]) {
     let min_diversity_ratio = case.min_diversity_ratio;
     let selection_strategy = case.selection_strategy;
     let tournament_size = case.tournament_size;
+    let local_search_rate = case.local_search_rate;
+    let local_search_attempts = case.local_search_attempts;
     let seed_count = runs.len();
     let median_solved_epoch = format_optional(median_u32(&mut solved_epochs));
     let median_elapsed_ms = format_optional(median_u128(&mut elapsed_values));
     let best_conflicts_median = format_optional(median_u32(&mut best_conflicts));
 
     println!(
-        "{size},{population},{epochs},{mutation_rate:.6},{elite_ratio:.6},{offspring_ratio:.6},{min_diversity_ratio:.6},{selection_strategy},{tournament_size},{seed_count},{solved_count},{solve_rate:.3},{median_solved_epoch},{median_elapsed_ms},{total_elapsed_ms},{best_conflicts_median},{best_conflicts_min}",
+        "{size},{population},{epochs},{mutation_rate:.6},{elite_ratio:.6},{offspring_ratio:.6},{min_diversity_ratio:.6},{selection_strategy},{tournament_size},{local_search_rate:.6},{local_search_attempts},{seed_count},{solved_count},{solve_rate:.3},{median_solved_epoch},{median_elapsed_ms},{total_elapsed_ms},{best_conflicts_median},{best_conflicts_min}",
     );
 }
 
@@ -289,7 +319,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let sweep_config = SweepConfig::parse();
 
     println!(
-        "size,population,epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,seeds,solved,solve_rate,median_solved_epoch,median_elapsed_ms,total_elapsed_ms,best_conflicts_median,best_conflicts_min"
+        "size,population,epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,local_search_rate,local_search_attempts,seeds,solved,solve_rate,median_solved_epoch,median_elapsed_ms,total_elapsed_ms,best_conflicts_median,best_conflicts_min"
     );
 
     for &size in &sweep_config.sizes {
@@ -301,28 +331,37 @@ fn main() -> Result<(), Box<dyn Error>> {
                             for &min_diversity_ratio in &sweep_config.min_diversity_ratios {
                                 for &selection_strategy in &sweep_config.selection_strategies {
                                     for &tournament_size in &sweep_config.tournament_sizes {
-                                        let case = SweepCase {
-                                            size,
-                                            population,
-                                            epochs,
-                                            mutation_rate,
-                                            elite_ratio,
-                                            offspring_ratio,
-                                            min_diversity_ratio,
-                                            selection_strategy,
-                                            tournament_size,
-                                        };
-                                        let mut runs = Vec::with_capacity(sweep_config.seed_count);
-                                        for seed_offset in 0..sweep_config.seed_count {
-                                            let seed = seed_for_offset(
-                                                sweep_config.seed_start,
-                                                seed_offset,
-                                            )?;
-                                            let run = run_single_seed(case, seed)?;
-                                            runs.push(run);
-                                        }
+                                        for &local_search_rate in &sweep_config.local_search_rates {
+                                            for &local_search_attempts in
+                                                &sweep_config.local_search_attempts
+                                            {
+                                                let case = SweepCase {
+                                                    size,
+                                                    population,
+                                                    epochs,
+                                                    mutation_rate,
+                                                    elite_ratio,
+                                                    offspring_ratio,
+                                                    min_diversity_ratio,
+                                                    selection_strategy,
+                                                    tournament_size,
+                                                    local_search_rate,
+                                                    local_search_attempts,
+                                                };
+                                                let mut runs =
+                                                    Vec::with_capacity(sweep_config.seed_count);
+                                                for seed_offset in 0..sweep_config.seed_count {
+                                                    let seed = seed_for_offset(
+                                                        sweep_config.seed_start,
+                                                        seed_offset,
+                                                    )?;
+                                                    let run = run_single_seed(case, seed)?;
+                                                    runs.push(run);
+                                                }
 
-                                        print_summary(case, &runs);
+                                                print_summary(case, &runs);
+                                            }
+                                        }
                                     }
                                 }
                             }

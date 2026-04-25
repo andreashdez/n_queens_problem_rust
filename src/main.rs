@@ -20,13 +20,15 @@ const DEFAULT_OFFSPRING_RATIO: f32 = ga::DEFAULT_OFFSPRING_RATIO;
 const DEFAULT_MIN_DIVERSITY_RATIO: f32 = ga::DEFAULT_MIN_DIVERSITY_RATIO;
 const DEFAULT_SELECTION_STRATEGY: ga::SelectionStrategy = ga::DEFAULT_SELECTION_STRATEGY;
 const DEFAULT_TOURNAMENT_SIZE: usize = ga::DEFAULT_TOURNAMENT_SIZE;
+const DEFAULT_LOCAL_SEARCH_RATE: f32 = ga::DEFAULT_LOCAL_SEARCH_RATE;
+const DEFAULT_LOCAL_SEARCH_ATTEMPTS: usize = ga::DEFAULT_LOCAL_SEARCH_ATTEMPTS;
 
 #[derive(Debug, Parser)]
 #[command(name = "n_queens_problem")]
 #[command(version)]
 #[command(about = "N-Queens genetic solver")]
 #[command(
-    after_help = "Examples:\n  cargo run --release\n  cargo run --release -- -n 18 -p 40000 -e 5000 -s 42 -m 0.08 -r 0.10 -o 0.10"
+    after_help = "Examples:\n  cargo run --release\n  cargo run --release -- -n 18 -p 40000 -e 5000 -s 42 -m 0.08 -r 0.10 -o 0.10 --local-search-rate 0.05"
 )]
 struct RunConfig {
     #[arg(
@@ -114,6 +116,22 @@ struct RunConfig {
     )]
     tournament_size: usize,
     #[arg(
+        long = "local-search-rate",
+        value_name = "0..1",
+        default_value_t = DEFAULT_LOCAL_SEARCH_RATE,
+        value_parser = parse_unit_interval,
+        help = "Fraction of non-elite chromosomes improved with local search each epoch"
+    )]
+    local_search_rate: f32,
+    #[arg(
+        long = "local-search-attempts",
+        value_name = "COUNT",
+        default_value_t = DEFAULT_LOCAL_SEARCH_ATTEMPTS,
+        value_parser = parse_usize,
+        help = "Random improving swaps attempted per selected chromosome"
+    )]
+    local_search_attempts: usize,
+    #[arg(
         long = "no-board",
         action = ArgAction::SetFalse,
         default_value_t = true,
@@ -181,9 +199,14 @@ fn print_run_summary_json(
         "min_diversity_ratio": json_ratio(run_config.min_diversity_ratio),
         "selection_strategy": run_config.selection_strategy.to_string(),
         "tournament_size": run_config.tournament_size,
+        "local_search_rate": json_ratio(run_config.local_search_rate),
+        "local_search_attempts": run_config.local_search_attempts,
         "final_population": final_population,
         "final_unique_chromosomes": final_epoch.map(|metrics| metrics.unique_chromosomes()),
         "final_diversity_ratio": final_epoch.map(|metrics| json_ratio(metrics.diversity_ratio())),
+        "last_local_search_improvements": final_epoch
+            .map(|metrics| metrics.local_search_improvements())
+            .unwrap_or_default(),
         "last_diversity_replacements": final_epoch
             .map(|metrics| metrics.diversity_replacements())
             .unwrap_or_default(),
@@ -227,7 +250,7 @@ fn write_run_metrics_csv(
 
     writeln!(
         metrics_file,
-        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,epoch,best_conflicts_sum,population_size,elapsed_ms,average_conflicts_sum,unique_chromosomes,diversity_ratio,epoch_mutation_rate,epoch_elite_ratio,offspring_count,stagnation_epochs,diversity_replacements"
+        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,local_search_rate,local_search_attempts,epoch,best_conflicts_sum,population_size,elapsed_ms,average_conflicts_sum,unique_chromosomes,diversity_ratio,epoch_mutation_rate,epoch_elite_ratio,offspring_count,local_search_improvements,stagnation_epochs,diversity_replacements"
     )
     .map_err(|error| {
         format!(
@@ -239,7 +262,7 @@ fn write_run_metrics_csv(
     for epoch_metrics in run_metrics.epochs() {
         writeln!(
             metrics_file,
-            "{seed},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{seed},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             run_config.board_size,
             run_config.population_size,
             run_config.max_epochs,
@@ -249,6 +272,8 @@ fn write_run_metrics_csv(
             run_config.min_diversity_ratio,
             run_config.selection_strategy,
             run_config.tournament_size,
+            run_config.local_search_rate,
+            run_config.local_search_attempts,
             epoch_metrics.epoch(),
             epoch_metrics.best_conflicts_sum(),
             epoch_metrics.population_size(),
@@ -259,6 +284,7 @@ fn write_run_metrics_csv(
             epoch_metrics.mutation_rate(),
             epoch_metrics.elite_ratio(),
             epoch_metrics.offspring_count(),
+            epoch_metrics.local_search_improvements(),
             epoch_metrics.stagnation_epochs(),
             epoch_metrics.diversity_replacements(),
         )
@@ -283,6 +309,12 @@ fn parse_positive_usize(raw_value: &str) -> Result<usize, String> {
     }
 
     Ok(value)
+}
+
+fn parse_usize(raw_value: &str) -> Result<usize, String> {
+    raw_value
+        .parse::<usize>()
+        .map_err(|err| format!("invalid value `{raw_value}`: {err}"))
 }
 
 fn parse_positive_u32(raw_value: &str) -> Result<u32, String> {
@@ -354,6 +386,8 @@ fn main() {
     .with_min_diversity_ratio(run_config.min_diversity_ratio)
     .with_selection_strategy(run_config.selection_strategy)
     .with_tournament_size(run_config.tournament_size)
+    .with_local_search_rate(run_config.local_search_rate)
+    .with_local_search_attempts(run_config.local_search_attempts)
     .validated()
     .unwrap_or_else(|error| {
         eprintln!("invalid GA config: {error}");
@@ -361,7 +395,7 @@ fn main() {
     });
 
     log::info!(
-        "start n_queens_problem board_size={} population={} epochs={} seed={seed} mutation_rate={} elite_ratio={} offspring_ratio={} min_diversity_ratio={} selection_strategy={} tournament_size={} draw_board={}",
+        "start n_queens_problem board_size={} population={} epochs={} seed={seed} mutation_rate={} elite_ratio={} offspring_ratio={} min_diversity_ratio={} selection_strategy={} tournament_size={} local_search_rate={} local_search_attempts={} draw_board={}",
         run_config.board_size,
         run_config.population_size,
         run_config.max_epochs,
@@ -371,6 +405,8 @@ fn main() {
         run_config.min_diversity_ratio,
         run_config.selection_strategy,
         run_config.tournament_size,
+        run_config.local_search_rate,
+        run_config.local_search_attempts,
         run_config.draw_board,
     );
 

@@ -1,6 +1,6 @@
 use std::{collections::HashSet, error::Error, fmt, time::Instant};
 
-use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
+use rand::{Rng, RngExt, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use rayon::prelude::*;
 
 use self::chromosome::Chromosome;
@@ -22,6 +22,8 @@ pub const DEFAULT_OFFSPRING_RATIO: f32 = 0.10;
 pub const DEFAULT_MIN_DIVERSITY_RATIO: f32 = 0.10;
 pub const DEFAULT_SELECTION_STRATEGY: SelectionStrategy = SelectionStrategy::Roulette;
 pub const DEFAULT_TOURNAMENT_SIZE: usize = 3;
+pub const DEFAULT_LOCAL_SEARCH_RATE: f32 = 0.0;
+pub const DEFAULT_LOCAL_SEARCH_ATTEMPTS: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectionStrategy {
@@ -49,6 +51,7 @@ pub struct EpochMetrics {
     mutation_rate: f32,
     elite_ratio: f32,
     offspring_count: usize,
+    local_search_improvements: usize,
     stagnation_epochs: u32,
     diversity_replacements: usize,
 }
@@ -58,6 +61,7 @@ struct EpochRecordContext {
     mutation_rate: f32,
     elite_ratio: f32,
     offspring_count: usize,
+    local_search_improvements: usize,
     stagnation_epochs: u32,
     diversity_replacements: usize,
     elapsed_ms: u128,
@@ -108,6 +112,10 @@ impl EpochMetrics {
         self.offspring_count
     }
 
+    pub fn local_search_improvements(&self) -> usize {
+        self.local_search_improvements
+    }
+
     pub fn stagnation_epochs(&self) -> u32 {
         self.stagnation_epochs
     }
@@ -151,6 +159,7 @@ impl RunMetrics {
             mutation_rate: context.mutation_rate,
             elite_ratio: context.elite_ratio,
             offspring_count: context.offspring_count,
+            local_search_improvements: context.local_search_improvements,
             stagnation_epochs: context.stagnation_epochs,
             diversity_replacements: context.diversity_replacements,
         });
@@ -177,6 +186,8 @@ pub struct GaConfig {
     pub min_diversity_ratio: f32,
     pub selection_strategy: SelectionStrategy,
     pub tournament_size: usize,
+    pub local_search_rate: f32,
+    pub local_search_attempts: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,6 +199,7 @@ pub enum GaConfigError {
     InvalidEliteRatio,
     InvalidOffspringRatio,
     InvalidMinDiversityRatio,
+    InvalidLocalSearchRate,
     TournamentSizeZero,
 }
 
@@ -212,6 +224,9 @@ impl fmt::Display for GaConfigError {
             }
             Self::InvalidMinDiversityRatio => formatter
                 .write_str("minimum diversity ratio must be finite and between 0.0 and 1.0"),
+            Self::InvalidLocalSearchRate => {
+                formatter.write_str("local search rate must be finite and between 0.0 and 1.0")
+            }
             Self::TournamentSizeZero => {
                 formatter.write_str("tournament size must be greater than 0")
             }
@@ -234,6 +249,8 @@ impl GaConfig {
             min_diversity_ratio: DEFAULT_MIN_DIVERSITY_RATIO,
             selection_strategy: DEFAULT_SELECTION_STRATEGY,
             tournament_size: DEFAULT_TOURNAMENT_SIZE,
+            local_search_rate: DEFAULT_LOCAL_SEARCH_RATE,
+            local_search_attempts: DEFAULT_LOCAL_SEARCH_ATTEMPTS,
         }
     }
 
@@ -276,6 +293,16 @@ impl GaConfig {
         self
     }
 
+    pub fn with_local_search_rate(mut self, local_search_rate: f32) -> Self {
+        self.local_search_rate = local_search_rate;
+        self
+    }
+
+    pub fn with_local_search_attempts(mut self, local_search_attempts: usize) -> Self {
+        self.local_search_attempts = local_search_attempts;
+        self
+    }
+
     pub fn validated(self) -> Result<Self, GaConfigError> {
         self.validate()?;
         Ok(self)
@@ -310,6 +337,10 @@ impl GaConfig {
             return Err(GaConfigError::InvalidMinDiversityRatio);
         }
 
+        if !is_unit_interval(self.local_search_rate) {
+            return Err(GaConfigError::InvalidLocalSearchRate);
+        }
+
         if self.tournament_size == 0 {
             return Err(GaConfigError::TournamentSizeZero);
         }
@@ -329,6 +360,8 @@ pub struct GeneticAlgorithm {
     min_diversity_ratio: f32,
     selection_strategy: SelectionStrategy,
     tournament_size: usize,
+    local_search_rate: f32,
+    local_search_attempts: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -341,6 +374,8 @@ struct GeneticAlgorithmParams {
     min_diversity_ratio: f32,
     selection_strategy: SelectionStrategy,
     tournament_size: usize,
+    local_search_rate: f32,
+    local_search_attempts: usize,
 }
 
 impl GeneticAlgorithm {
@@ -356,6 +391,8 @@ impl GeneticAlgorithm {
             min_diversity_ratio: params.min_diversity_ratio,
             selection_strategy: params.selection_strategy,
             tournament_size: params.tournament_size,
+            local_search_rate: params.local_search_rate,
+            local_search_attempts: params.local_search_attempts,
         }
     }
 
@@ -384,6 +421,7 @@ impl GeneticAlgorithm {
                 mutation_rate: self.mutation_rate,
                 elite_ratio: self.elite_ratio,
                 offspring_count,
+                local_search_improvements: 0,
                 stagnation_epochs: 0,
                 diversity_replacements: 0,
                 elapsed_ms: started_at.elapsed().as_millis(),
@@ -401,7 +439,7 @@ impl GeneticAlgorithm {
         let stagnation_reset_interval = stagnation_reset_interval(self.max_epoch_count);
         let mut stagnation_epochs = 0;
         log::info!(
-            "running ga epochs={} population_size={} progress_log_interval={} stagnation_reset_interval={} initial_best_conflicts_sum={best_conflicts_sum} base_mutation_rate={} base_elite_ratio={} offspring_ratio={} offspring_count={} selection_strategy={} tournament_size={}",
+            "running ga epochs={} population_size={} progress_log_interval={} stagnation_reset_interval={} initial_best_conflicts_sum={best_conflicts_sum} base_mutation_rate={} base_elite_ratio={} offspring_ratio={} offspring_count={} selection_strategy={} tournament_size={} local_search_rate={} local_search_attempts={}",
             self.max_epoch_count,
             self.get_population_size(),
             progress_log_interval,
@@ -412,6 +450,8 @@ impl GeneticAlgorithm {
             offspring_count,
             self.selection_strategy,
             self.tournament_size,
+            self.local_search_rate,
+            self.local_search_attempts,
         );
 
         for epoch in 0..self.max_epoch_count {
@@ -447,6 +487,8 @@ impl GeneticAlgorithm {
 
             self.mate_random_chromosomes(offspring_count);
             self.mutate_population(epoch_mutation_rate, epoch_elite_ratio);
+            let local_search_improvements =
+                self.improve_population_with_local_search(epoch_elite_ratio);
             self.select_survivors(epoch_elite_ratio);
             self.calc_fitness();
 
@@ -473,6 +515,7 @@ impl GeneticAlgorithm {
                     mutation_rate: epoch_mutation_rate,
                     elite_ratio: epoch_elite_ratio,
                     offspring_count,
+                    local_search_improvements,
                     stagnation_epochs,
                     diversity_replacements,
                     elapsed_ms: started_at.elapsed().as_millis(),
@@ -481,7 +524,7 @@ impl GeneticAlgorithm {
 
             if epoch_best_conflicts_sum == 0 {
                 log::info!(
-                    "ga solved epoch={epoch_number} population_size={population_size} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4}"
+                    "ga solved epoch={epoch_number} population_size={population_size} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4} local_search_improvements={local_search_improvements}"
                 );
                 run_metrics.mark_solved(epoch_number);
                 run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
@@ -490,7 +533,7 @@ impl GeneticAlgorithm {
 
             if is_improvement {
                 log::info!(
-                    "ga improvement epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4}",
+                    "ga improvement epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4} local_search_improvements={local_search_improvements}",
                 );
                 continue;
             }
@@ -499,7 +542,7 @@ impl GeneticAlgorithm {
             let is_last_epoch = epoch_number == self.max_epoch_count;
             if is_periodic_log || is_last_epoch {
                 log::info!(
-                    "ga progress epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} stagnant_epochs={stagnation_epochs} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4} diversity_replacements={diversity_replacements}",
+                    "ga progress epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} stagnant_epochs={stagnation_epochs} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4} local_search_improvements={local_search_improvements} diversity_replacements={diversity_replacements}",
                 );
             }
         }
@@ -735,6 +778,43 @@ impl GeneticAlgorithm {
             });
     }
 
+    fn improve_population_with_local_search(&mut self, elite_ratio: f32) -> usize {
+        if self.population.len() < 2
+            || self.local_search_rate <= 0.0
+            || self.local_search_attempts == 0
+        {
+            return 0;
+        }
+
+        let elite_ratio = normalize_unit_interval(elite_ratio, self.elite_ratio);
+        let elite_count = elite_count_for_population(
+            self.target_population_size,
+            self.population.len(),
+            elite_ratio,
+        );
+        select_elites_to_front(&mut self.population, elite_count);
+
+        let non_elite_count = self.population.len().saturating_sub(elite_count);
+        let candidate_count = local_search_candidate_count(non_elite_count, self.local_search_rate);
+        if candidate_count == 0 {
+            return 0;
+        }
+
+        let mut candidate_indices = (elite_count..self.population.len()).collect::<Vec<_>>();
+        candidate_indices.shuffle(&mut self.rng);
+        candidate_indices.truncate(candidate_count);
+
+        let attempts = self.local_search_attempts;
+        let rng = &mut self.rng;
+        let population = &mut self.population;
+        candidate_indices
+            .into_iter()
+            .filter(|&index| {
+                improve_chromosome_with_local_search(&mut population[index], attempts, rng)
+            })
+            .count()
+    }
+
     fn select_survivors(&mut self, elite_ratio: f32) {
         if self.population.len() <= self.target_population_size {
             return;
@@ -861,6 +941,8 @@ pub fn build_genetic_algorithm(config: GaConfig) -> GeneticAlgorithm {
     let offspring_ratio = normalize_unit_interval(config.offspring_ratio, DEFAULT_OFFSPRING_RATIO);
     let min_diversity_ratio =
         normalize_unit_interval(config.min_diversity_ratio, DEFAULT_MIN_DIVERSITY_RATIO);
+    let local_search_rate =
+        normalize_unit_interval(config.local_search_rate, DEFAULT_LOCAL_SEARCH_RATE);
     let tournament_size = config.tournament_size.max(1);
     let mut rng = StdRng::seed_from_u64(config.seed);
     let mut population: Vec<Chromosome> = Vec::with_capacity(target_population_size);
@@ -883,6 +965,8 @@ pub fn build_genetic_algorithm(config: GaConfig) -> GeneticAlgorithm {
             min_diversity_ratio,
             selection_strategy: config.selection_strategy,
             tournament_size,
+            local_search_rate,
+            local_search_attempts: config.local_search_attempts,
         },
     )
 }
@@ -957,6 +1041,51 @@ fn elite_count_for_population(
 
     let elite_count = ((target_population_size as f32) * elite_ratio).round() as usize;
     elite_count.min(target_population_size).min(population_size)
+}
+
+fn local_search_candidate_count(non_elite_count: usize, local_search_rate: f32) -> usize {
+    if non_elite_count == 0 || local_search_rate <= 0.0 || !local_search_rate.is_finite() {
+        return 0;
+    }
+
+    (((non_elite_count as f32) * local_search_rate)
+        .round()
+        .max(1.0) as usize)
+        .min(non_elite_count)
+}
+
+fn improve_chromosome_with_local_search(
+    chromosome: &mut Chromosome,
+    attempts: usize,
+    rng: &mut impl Rng,
+) -> bool {
+    let chromosome_size = chromosome.get_positions().len();
+    if chromosome_size < 2 || attempts == 0 || chromosome.get_conflicts_sum() == 0 {
+        return false;
+    }
+
+    let mut improved = false;
+    for _ in 0..attempts {
+        let current_conflicts_sum = chromosome.get_conflicts_sum();
+        if current_conflicts_sum == 0 {
+            break;
+        }
+
+        let index_one = rng.random_range(0..chromosome_size);
+        let mut index_two = rng.random_range(0..(chromosome_size - 1));
+        if index_two >= index_one {
+            index_two += 1;
+        }
+
+        chromosome.mutate_swap_at(index_one, index_two);
+        if chromosome.get_conflicts_sum() < current_conflicts_sum {
+            improved = true;
+        } else {
+            chromosome.mutate_swap_at(index_one, index_two);
+        }
+    }
+
+    improved
 }
 
 fn select_elites_to_front(population: &mut [Chromosome], elite_count: usize) {
@@ -1150,10 +1279,11 @@ mod tests {
     use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 
     use super::{
-        DEFAULT_ELITE_RATIO, DEFAULT_MIN_DIVERSITY_RATIO, DEFAULT_MUTATION_RATE,
-        DEFAULT_OFFSPRING_RATIO, DEFAULT_SELECTION_STRATEGY, DEFAULT_TOURNAMENT_SIZE, GaConfig,
-        GaConfigError, GeneticAlgorithm, GeneticAlgorithmParams, SelectionStrategy,
-        build_genetic_algorithm, chromosome::Chromosome, pmx,
+        DEFAULT_ELITE_RATIO, DEFAULT_LOCAL_SEARCH_ATTEMPTS, DEFAULT_LOCAL_SEARCH_RATE,
+        DEFAULT_MIN_DIVERSITY_RATIO, DEFAULT_MUTATION_RATE, DEFAULT_OFFSPRING_RATIO,
+        DEFAULT_SELECTION_STRATEGY, DEFAULT_TOURNAMENT_SIZE, GaConfig, GaConfigError,
+        GeneticAlgorithm, GeneticAlgorithmParams, SelectionStrategy, build_genetic_algorithm,
+        chromosome::Chromosome, pmx,
     };
 
     fn build_test_algorithm(population: Vec<Chromosome>) -> GeneticAlgorithm {
@@ -1170,6 +1300,8 @@ mod tests {
                 min_diversity_ratio: DEFAULT_MIN_DIVERSITY_RATIO,
                 selection_strategy: DEFAULT_SELECTION_STRATEGY,
                 tournament_size: DEFAULT_TOURNAMENT_SIZE,
+                local_search_rate: DEFAULT_LOCAL_SEARCH_RATE,
+                local_search_attempts: DEFAULT_LOCAL_SEARCH_ATTEMPTS,
             },
         )
     }
@@ -1192,6 +1324,8 @@ mod tests {
             .with_min_diversity_ratio(0.15)
             .with_selection_strategy(SelectionStrategy::Tournament)
             .with_tournament_size(5)
+            .with_local_search_rate(0.25)
+            .with_local_search_attempts(12)
             .validated()
             .expect("valid customized config should pass validation");
 
@@ -1201,6 +1335,8 @@ mod tests {
         assert_eq!(config.min_diversity_ratio, 0.15);
         assert_eq!(config.selection_strategy, SelectionStrategy::Tournament);
         assert_eq!(config.tournament_size, 5);
+        assert_eq!(config.local_search_rate, 0.25);
+        assert_eq!(config.local_search_attempts, 12);
     }
 
     #[test]
@@ -1240,6 +1376,12 @@ mod tests {
                 .with_min_diversity_ratio(1.1)
                 .validate(),
             Err(GaConfigError::InvalidMinDiversityRatio)
+        );
+        assert_eq!(
+            GaConfig::new(8, 32, 100, 42)
+                .with_local_search_rate(f32::INFINITY)
+                .validate(),
+            Err(GaConfigError::InvalidLocalSearchRate)
         );
         assert_eq!(
             GaConfig::new(8, 32, 100, 42)
@@ -1328,6 +1470,7 @@ mod tests {
             initial_epoch.offspring_count(),
             super::offspring_count_for_population(32, DEFAULT_OFFSPRING_RATIO)
         );
+        assert_eq!(initial_epoch.local_search_improvements(), 0);
         assert_eq!(initial_epoch.stagnation_epochs(), 0);
         assert_eq!(initial_epoch.diversity_replacements(), 0);
     }
@@ -1350,6 +1493,7 @@ mod tests {
         assert_eq!(first_epoch.mutation_rate(), 0.0);
         assert_eq!(first_epoch.elite_ratio(), 0.25);
         assert_eq!(first_epoch.offspring_count(), 0);
+        assert_eq!(first_epoch.local_search_improvements(), 0);
         assert_eq!(first_epoch.stagnation_epochs(), 1);
         assert_eq!(first_epoch.diversity_replacements(), 0);
         assert!(first_epoch.average_conflicts_sum() >= first_epoch.best_conflicts_sum() as f32);
@@ -1429,6 +1573,78 @@ mod tests {
     }
 
     #[test]
+    fn test_local_search_candidate_count_scales_with_non_elites() {
+        assert_eq!(super::local_search_candidate_count(0, 0.50), 0);
+        assert_eq!(super::local_search_candidate_count(10, 0.0), 0);
+        assert_eq!(super::local_search_candidate_count(10, 0.01), 1);
+        assert_eq!(super::local_search_candidate_count(10, 0.25), 3);
+        assert_eq!(super::local_search_candidate_count(10, 1.0), 10);
+    }
+
+    #[test]
+    fn test_local_search_keeps_only_improving_swaps() {
+        let mut chromosome = Chromosome::new(vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        let initial_conflicts_sum = chromosome.get_conflicts_sum();
+        let mut rng = StdRng::seed_from_u64(7);
+
+        let improved = super::improve_chromosome_with_local_search(&mut chromosome, 200, &mut rng);
+
+        assert!(improved);
+        assert!(chromosome.get_conflicts_sum() < initial_conflicts_sum);
+
+        let mut positions = chromosome.get_positions().to_vec();
+        positions.sort_unstable();
+        assert_eq!(positions, (0u16..8).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_population_local_search_improves_selected_non_elites() {
+        let solution = vec![0, 4, 7, 5, 2, 6, 1, 3];
+        let duplicate = vec![0, 1, 2, 3, 4, 5, 6, 7];
+        let mut population = vec![Chromosome::new(solution.clone())];
+        population.extend((0..5).map(|_| Chromosome::new(duplicate.clone())));
+
+        let mut genetic_algorithm = GeneticAlgorithm::new(
+            population,
+            StdRng::seed_from_u64(7),
+            GeneticAlgorithmParams {
+                target_population_size: 6,
+                max_epoch_count: 10,
+                mutation_rate: DEFAULT_MUTATION_RATE,
+                elite_ratio: 0.20,
+                offspring_ratio: DEFAULT_OFFSPRING_RATIO,
+                min_diversity_ratio: DEFAULT_MIN_DIVERSITY_RATIO,
+                selection_strategy: DEFAULT_SELECTION_STRATEGY,
+                tournament_size: DEFAULT_TOURNAMENT_SIZE,
+                local_search_rate: 1.0,
+                local_search_attempts: 200,
+            },
+        );
+
+        let initial_total_conflicts = genetic_algorithm
+            .population
+            .iter()
+            .map(Chromosome::get_conflicts_sum)
+            .sum::<u32>();
+
+        let improvements = genetic_algorithm.improve_population_with_local_search(0.20);
+        let final_total_conflicts = genetic_algorithm
+            .population
+            .iter()
+            .map(Chromosome::get_conflicts_sum)
+            .sum::<u32>();
+        let positions = genetic_algorithm
+            .population
+            .iter()
+            .map(|chromosome| chromosome.get_positions().to_vec())
+            .collect::<Vec<_>>();
+
+        assert!(improvements > 0);
+        assert!(final_total_conflicts < initial_total_conflicts);
+        assert!(positions.contains(&solution));
+    }
+
+    #[test]
     fn test_mate_random_chromosomes_uses_offspring_count() {
         let population = (0..8)
             .map(|seed| Chromosome::new(shuffled_values(8, seed)))
@@ -1464,6 +1680,8 @@ mod tests {
                 min_diversity_ratio: DEFAULT_MIN_DIVERSITY_RATIO,
                 selection_strategy: SelectionStrategy::Tournament,
                 tournament_size: 3,
+                local_search_rate: DEFAULT_LOCAL_SEARCH_RATE,
+                local_search_attempts: DEFAULT_LOCAL_SEARCH_ATTEMPTS,
             },
         );
 
@@ -1523,6 +1741,8 @@ mod tests {
                 min_diversity_ratio: 0.50,
                 selection_strategy: DEFAULT_SELECTION_STRATEGY,
                 tournament_size: DEFAULT_TOURNAMENT_SIZE,
+                local_search_rate: DEFAULT_LOCAL_SEARCH_RATE,
+                local_search_attempts: DEFAULT_LOCAL_SEARCH_ATTEMPTS,
             },
         );
 
@@ -1558,6 +1778,8 @@ mod tests {
                 min_diversity_ratio: DEFAULT_MIN_DIVERSITY_RATIO,
                 selection_strategy: DEFAULT_SELECTION_STRATEGY,
                 tournament_size: DEFAULT_TOURNAMENT_SIZE,
+                local_search_rate: DEFAULT_LOCAL_SEARCH_RATE,
+                local_search_attempts: DEFAULT_LOCAL_SEARCH_ATTEMPTS,
             },
         );
 
@@ -1589,6 +1811,8 @@ mod tests {
                 min_diversity_ratio: DEFAULT_MIN_DIVERSITY_RATIO,
                 selection_strategy: DEFAULT_SELECTION_STRATEGY,
                 tournament_size: DEFAULT_TOURNAMENT_SIZE,
+                local_search_rate: DEFAULT_LOCAL_SEARCH_RATE,
+                local_search_attempts: DEFAULT_LOCAL_SEARCH_ATTEMPTS,
             },
         );
 
