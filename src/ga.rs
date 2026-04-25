@@ -678,9 +678,26 @@ fn pmx(parent_one: &[u16], parent_two: &[u16], rng: &mut impl Rng) -> Vec<u16> {
 
     let chromosome_half_size = chromosome_size / 2;
     let point_one = rng.random_range(0..chromosome_half_size);
-    let point_two = rng.random_range(chromosome_half_size..chromosome_size);
+    let point_two_exclusive = rng.random_range(chromosome_half_size..=chromosome_size);
 
-    log::trace!("partially mapped crossover [point_one={point_one}, point_two={point_two}]");
+    log::trace!(
+        "partially mapped crossover [point_one={point_one}, point_two_exclusive={point_two_exclusive}]"
+    );
+
+    pmx_with_crossover_points(parent_one, parent_two, point_one, point_two_exclusive)
+}
+
+fn pmx_with_crossover_points(
+    parent_one: &[u16],
+    parent_two: &[u16],
+    point_one: usize,
+    point_two_exclusive: usize,
+) -> Vec<u16> {
+    debug_assert_eq!(parent_one.len(), parent_two.len());
+    debug_assert!(point_one < point_two_exclusive);
+    debug_assert!(point_two_exclusive <= parent_one.len());
+
+    let chromosome_size = parent_one.len();
 
     let mut parent_two_positions = vec![usize::MAX; chromosome_size];
     for (index, &gene) in parent_two.iter().enumerate() {
@@ -690,7 +707,7 @@ fn pmx(parent_one: &[u16], parent_two: &[u16], rng: &mut impl Rng) -> Vec<u16> {
     let mut child_genes = vec![None; parent_one.len()];
     let mut child_used = vec![false; chromosome_size];
 
-    for i in point_one..point_two {
+    for i in point_one..point_two_exclusive {
         let gene = parent_one[i];
         child_genes[i] = Some(gene);
         child_used[usize::from(gene)] = true;
@@ -701,7 +718,7 @@ fn pmx(parent_one: &[u16], parent_two: &[u16], rng: &mut impl Rng) -> Vec<u16> {
     for (i, &gene) in parent_two
         .iter()
         .enumerate()
-        .take(point_two)
+        .take(point_two_exclusive)
         .skip(point_one)
     {
         if !child_used[usize::from(gene)] {
@@ -1022,6 +1039,22 @@ mod tests {
             assert_eq!(child.len(), 16);
             assert_eq!(child_sorted, expected_values);
         }
+    }
+
+    #[test]
+    fn test_pmx_crossover_range_can_include_last_gene() {
+        let parent_one = vec![0, 1, 2, 3, 4, 5, 6, 7];
+        let parent_two = vec![7, 6, 5, 4, 3, 2, 1, 0];
+
+        let child = super::pmx_with_crossover_points(&parent_one, &parent_two, 3, parent_one.len());
+        let mut child_sorted = child.clone();
+        child_sorted.sort_unstable();
+
+        assert_eq!(
+            child[parent_one.len() - 1],
+            parent_one[parent_one.len() - 1]
+        );
+        assert_eq!(child_sorted, parent_one);
     }
 
     proptest! {
