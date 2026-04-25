@@ -1,4 +1,4 @@
-use std::{error::Error, fmt, time::Instant};
+use std::{collections::HashSet, error::Error, fmt, time::Instant};
 
 use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
 use rayon::prelude::*;
@@ -26,6 +26,21 @@ pub struct EpochMetrics {
     best_conflicts_sum: u32,
     population_size: usize,
     elapsed_ms: u128,
+    average_conflicts_sum: f32,
+    unique_chromosomes: usize,
+    mutation_rate: f32,
+    elite_ratio: f32,
+    offspring_count: usize,
+    stagnation_epochs: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EpochRecordContext {
+    mutation_rate: f32,
+    elite_ratio: f32,
+    offspring_count: usize,
+    stagnation_epochs: u32,
+    elapsed_ms: u128,
 }
 
 impl EpochMetrics {
@@ -43,6 +58,30 @@ impl EpochMetrics {
 
     pub fn elapsed_ms(&self) -> u128 {
         self.elapsed_ms
+    }
+
+    pub fn average_conflicts_sum(&self) -> f32 {
+        self.average_conflicts_sum
+    }
+
+    pub fn unique_chromosomes(&self) -> usize {
+        self.unique_chromosomes
+    }
+
+    pub fn mutation_rate(&self) -> f32 {
+        self.mutation_rate
+    }
+
+    pub fn elite_ratio(&self) -> f32 {
+        self.elite_ratio
+    }
+
+    pub fn offspring_count(&self) -> usize {
+        self.offspring_count
+    }
+
+    pub fn stagnation_epochs(&self) -> u32 {
+        self.stagnation_epochs
     }
 }
 
@@ -66,18 +105,21 @@ impl RunMetrics {
         self.total_elapsed_ms
     }
 
-    fn record_epoch(
-        &mut self,
-        epoch: u32,
-        best_conflicts_sum: u32,
-        population_size: usize,
-        elapsed_ms: u128,
-    ) {
+    fn record_epoch(&mut self, epoch: u32, population: &[Chromosome], context: EpochRecordContext) {
+        let (best_conflicts_sum, average_conflicts_sum, unique_chromosomes) =
+            population_metrics(population);
+
         self.epochs.push(EpochMetrics {
             epoch,
             best_conflicts_sum,
-            population_size,
-            elapsed_ms,
+            population_size: population.len(),
+            elapsed_ms: context.elapsed_ms,
+            average_conflicts_sum,
+            unique_chromosomes,
+            mutation_rate: context.mutation_rate,
+            elite_ratio: context.elite_ratio,
+            offspring_count: context.offspring_count,
+            stagnation_epochs: context.stagnation_epochs,
         });
     }
 
@@ -254,11 +296,18 @@ impl GeneticAlgorithm {
 
         self.calc_fitness();
         let mut best_conflicts_sum = self.get_best_chromosome().get_conflicts_sum();
+        let offspring_count =
+            offspring_count_for_population(self.target_population_size, self.offspring_ratio);
         run_metrics.record_epoch(
             0,
-            best_conflicts_sum,
-            self.get_population_size(),
-            started_at.elapsed().as_millis(),
+            &self.population,
+            EpochRecordContext {
+                mutation_rate: self.mutation_rate,
+                elite_ratio: self.elite_ratio,
+                offspring_count,
+                stagnation_epochs: 0,
+                elapsed_ms: started_at.elapsed().as_millis(),
+            },
         );
 
         if best_conflicts_sum == 0 {
@@ -270,8 +319,6 @@ impl GeneticAlgorithm {
 
         let progress_log_interval = epoch_progress_log_interval(self.max_epoch_count);
         let stagnation_reset_interval = stagnation_reset_interval(self.max_epoch_count);
-        let offspring_count =
-            offspring_count_for_population(self.target_population_size, self.offspring_ratio);
         let mut stagnation_epochs = 0;
         log::info!(
             "running ga epochs={} population_size={} progress_log_interval={} stagnation_reset_interval={} initial_best_conflicts_sum={best_conflicts_sum} base_mutation_rate={} base_elite_ratio={} offspring_ratio={} offspring_count={}",
@@ -324,11 +371,24 @@ impl GeneticAlgorithm {
             let epoch_best_conflicts_sum = self.get_best_chromosome().get_conflicts_sum();
             let population_size = self.get_population_size();
 
+            let is_improvement = epoch_best_conflicts_sum < best_conflicts_sum;
+            if is_improvement {
+                best_conflicts_sum = epoch_best_conflicts_sum;
+                stagnation_epochs = 0;
+            } else {
+                stagnation_epochs += 1;
+            }
+
             run_metrics.record_epoch(
                 epoch_number,
-                epoch_best_conflicts_sum,
-                population_size,
-                started_at.elapsed().as_millis(),
+                &self.population,
+                EpochRecordContext {
+                    mutation_rate: epoch_mutation_rate,
+                    elite_ratio: epoch_elite_ratio,
+                    offspring_count,
+                    stagnation_epochs,
+                    elapsed_ms: started_at.elapsed().as_millis(),
+                },
             );
 
             if epoch_best_conflicts_sum == 0 {
@@ -340,17 +400,12 @@ impl GeneticAlgorithm {
                 return run_metrics;
             }
 
-            let is_improvement = epoch_best_conflicts_sum < best_conflicts_sum;
             if is_improvement {
-                best_conflicts_sum = epoch_best_conflicts_sum;
-                stagnation_epochs = 0;
                 log::info!(
                     "ga improvement epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4}",
                 );
                 continue;
             }
-
-            stagnation_epochs += 1;
 
             let is_periodic_log = epoch_number % progress_log_interval == 0;
             let is_last_epoch = epoch_number == self.max_epoch_count;
@@ -648,6 +703,29 @@ fn offspring_count_for_population(target_population_size: usize, offspring_ratio
     ((target_population_size as f64) * f64::from(offspring_ratio))
         .round()
         .max(1.0) as usize
+}
+
+fn population_metrics(population: &[Chromosome]) -> (u32, f32, usize) {
+    if population.is_empty() {
+        return (0, 0.0, 0);
+    }
+
+    let mut best_conflicts_sum = u32::MAX;
+    let mut total_conflicts_sum = 0u64;
+    let mut unique_chromosomes = HashSet::with_capacity(population.len());
+
+    for chromosome in population {
+        let conflicts_sum = chromosome.get_conflicts_sum();
+        best_conflicts_sum = best_conflicts_sum.min(conflicts_sum);
+        total_conflicts_sum += u64::from(conflicts_sum);
+        unique_chromosomes.insert(chromosome.get_positions());
+    }
+
+    (
+        best_conflicts_sum,
+        total_conflicts_sum as f32 / population.len() as f32,
+        unique_chromosomes.len(),
+    )
 }
 
 fn elite_count_for_population(
@@ -999,8 +1077,45 @@ mod tests {
 
         let run_metrics = genetic_algorithm.run_algorithm();
         assert!(!run_metrics.epochs().is_empty());
-        assert_eq!(run_metrics.epochs()[0].epoch(), 0);
-        assert!(run_metrics.total_elapsed_ms() >= run_metrics.epochs()[0].elapsed_ms());
+        let initial_epoch = &run_metrics.epochs()[0];
+        assert_eq!(initial_epoch.epoch(), 0);
+        assert!(run_metrics.total_elapsed_ms() >= initial_epoch.elapsed_ms());
+        assert!(initial_epoch.average_conflicts_sum() >= initial_epoch.best_conflicts_sum() as f32);
+        assert!(initial_epoch.unique_chromosomes() > 0);
+        assert_eq!(initial_epoch.mutation_rate(), DEFAULT_MUTATION_RATE);
+        assert_eq!(initial_epoch.elite_ratio(), DEFAULT_ELITE_RATIO);
+        assert_eq!(
+            initial_epoch.offspring_count(),
+            super::offspring_count_for_population(32, DEFAULT_OFFSPRING_RATIO)
+        );
+        assert_eq!(initial_epoch.stagnation_epochs(), 0);
+    }
+
+    #[test]
+    fn test_run_metrics_include_adaptive_epoch_details() {
+        let mut genetic_algorithm = build_genetic_algorithm(
+            GaConfig::new(3, 8, 2, 42)
+                .with_mutation_rate(0.0)
+                .with_elite_ratio(0.25)
+                .with_offspring_ratio(0.0),
+        );
+
+        let run_metrics = genetic_algorithm.run_algorithm();
+
+        assert_eq!(run_metrics.solved_epoch(), None);
+        assert_eq!(run_metrics.epochs().len(), 3);
+
+        let first_epoch = &run_metrics.epochs()[1];
+        assert_eq!(first_epoch.mutation_rate(), 0.0);
+        assert_eq!(first_epoch.elite_ratio(), 0.25);
+        assert_eq!(first_epoch.offspring_count(), 0);
+        assert_eq!(first_epoch.stagnation_epochs(), 1);
+        assert!(first_epoch.average_conflicts_sum() >= first_epoch.best_conflicts_sum() as f32);
+        assert!(first_epoch.unique_chromosomes() > 0);
+
+        let second_epoch = &run_metrics.epochs()[2];
+        assert_eq!(second_epoch.stagnation_epochs(), 2);
+        assert!(second_epoch.elite_ratio() < first_epoch.elite_ratio());
     }
 
     #[test]

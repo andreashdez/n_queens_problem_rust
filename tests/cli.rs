@@ -146,12 +146,13 @@ fn metrics_csv_contains_run_configuration_and_epochs() {
     let lines = csv.lines().collect::<Vec<_>>();
     assert_eq!(
         lines[0],
-        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,epoch,best_conflicts_sum,population_size,elapsed_ms"
+        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,epoch,best_conflicts_sum,population_size,elapsed_ms,average_conflicts_sum,unique_chromosomes,epoch_mutation_rate,epoch_elite_ratio,offspring_count,stagnation_epochs"
     );
     assert_eq!(lines.len(), 4);
     assert!(lines[1].starts_with("42,4,8,2,0,0.25,0,0,"));
     assert!(lines[2].starts_with("42,4,8,2,0,0.25,0,1,"));
     assert!(lines[3].starts_with("42,4,8,2,0,0.25,0,2,"));
+    assert_eq!(lines[1].split(',').count(), 17);
 }
 
 #[test]

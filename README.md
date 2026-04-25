@@ -30,7 +30,7 @@ cargo run --release -- -n 18 -p 40000 -e 5000 -s 42 -m 0.08 -r 0.10 -o 0.10
 - `-r`, `--elite-ratio <0..1>`: fraction of top chromosomes retained before random survivor sampling. Default: `0.10`.
 - `-o`, `--offspring-ratio <0..1>`: fraction of the target population produced as offspring each epoch. Default: `0.10`.
 - `--no-board`: skip board rendering output.
-- `--metrics-csv <path>`: write per-epoch run metrics to a CSV file (includes seed, offspring ratio, elapsed ms, and best conflicts).
+- `--metrics-csv <path>`: write per-epoch run metrics to a CSV file (includes best/average conflicts, unique chromosomes, adaptive rates, offspring count, stagnation, and elapsed ms).
 
 If `--seed` is omitted, a random seed is generated and logged.
 

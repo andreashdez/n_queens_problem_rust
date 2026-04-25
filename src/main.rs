@@ -127,7 +127,7 @@ fn write_run_metrics_csv(
 
     writeln!(
         metrics_file,
-        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,epoch,best_conflicts_sum,population_size,elapsed_ms"
+        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,epoch,best_conflicts_sum,population_size,elapsed_ms,average_conflicts_sum,unique_chromosomes,epoch_mutation_rate,epoch_elite_ratio,offspring_count,stagnation_epochs"
     )
     .map_err(|error| {
         format!(
@@ -139,7 +139,7 @@ fn write_run_metrics_csv(
     for epoch_metrics in run_metrics.epochs() {
         writeln!(
             metrics_file,
-            "{seed},{},{},{},{},{},{},{},{},{},{}",
+            "{seed},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             run_config.board_size,
             run_config.population_size,
             run_config.max_epochs,
@@ -150,6 +150,12 @@ fn write_run_metrics_csv(
             epoch_metrics.best_conflicts_sum(),
             epoch_metrics.population_size(),
             epoch_metrics.elapsed_ms(),
+            epoch_metrics.average_conflicts_sum(),
+            epoch_metrics.unique_chromosomes(),
+            epoch_metrics.mutation_rate(),
+            epoch_metrics.elite_ratio(),
+            epoch_metrics.offspring_count(),
+            epoch_metrics.stagnation_epochs(),
         )
         .map_err(|error| {
             format!(
