@@ -500,6 +500,7 @@ dependencies = [
  "proptest",
  "rand 0.10.1",
  "rayon",
+ "serde_json",
  "simple_logger",
 ]
 

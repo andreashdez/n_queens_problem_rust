@@ -8,6 +8,7 @@ use std::{
 use clap::{ArgAction, Parser};
 use n_queens_problem::{ga, ui};
 use rand::RngExt;
+use serde_json::json;
 use simple_logger::SimpleLogger;
 
 const DEFAULT_BOARD_SIZE: u16 = 18;
@@ -98,6 +99,65 @@ struct RunConfig {
         help = "Write per-epoch run metrics to CSV"
     )]
     metrics_csv: Option<PathBuf>,
+    #[arg(
+        long = "log-level",
+        value_name = "LEVEL",
+        default_value = "info",
+        value_parser = parse_log_level,
+        help = "Log level: off, error, warn, info, debug, or trace"
+    )]
+    log_level: log::LevelFilter,
+    #[arg(
+        long = "quiet",
+        action = ArgAction::SetTrue,
+        help = "Suppress log output"
+    )]
+    quiet: bool,
+    #[arg(
+        long = "json",
+        action = ArgAction::SetTrue,
+        help = "Print a machine-readable JSON summary"
+    )]
+    json_output: bool,
+}
+
+fn chromosome_json(chromosome: &ga::chromosome::Chromosome) -> serde_json::Value {
+    json!({
+        "positions": chromosome.get_positions(),
+        "conflicts": chromosome.get_conflicts(),
+        "conflicts_sum": chromosome.get_conflicts_sum(),
+    })
+}
+
+fn print_run_summary_json(
+    run_config: &RunConfig,
+    seed: u64,
+    run_metrics: &ga::RunMetrics,
+    best_chromosome: &ga::chromosome::Chromosome,
+    worst_chromosome: &ga::chromosome::Chromosome,
+    final_population: usize,
+    metrics_csv: Option<&Path>,
+) -> Result<(), String> {
+    let summary = json!({
+        "seed": seed,
+        "board_size": run_config.board_size,
+        "target_population": run_config.population_size,
+        "max_epochs": run_config.max_epochs,
+        "mutation_rate": run_config.mutation_rate,
+        "elite_ratio": run_config.elite_ratio,
+        "offspring_ratio": run_config.offspring_ratio,
+        "final_population": final_population,
+        "elapsed_ms": run_metrics.total_elapsed_ms(),
+        "solved_epoch": run_metrics.solved_epoch(),
+        "metrics_csv": metrics_csv.map(|path| path.display().to_string()),
+        "best_chromosome": chromosome_json(best_chromosome),
+        "worst_chromosome": chromosome_json(worst_chromosome),
+    });
+
+    serde_json::to_writer_pretty(std::io::stdout(), &summary)
+        .map_err(|error| format!("failed to write JSON summary: {error}"))?;
+    println!();
+    Ok(())
 }
 
 fn write_run_metrics_csv(
@@ -204,13 +264,27 @@ fn parse_unit_interval(raw_value: &str) -> Result<f32, String> {
     Ok(value)
 }
 
-fn main() {
-    SimpleLogger::new()
-        .with_level(log::LevelFilter::Info)
-        .init()
-        .unwrap();
+fn parse_log_level(raw_value: &str) -> Result<log::LevelFilter, String> {
+    match raw_value.to_ascii_lowercase().as_str() {
+        "off" => Ok(log::LevelFilter::Off),
+        "error" => Ok(log::LevelFilter::Error),
+        "warn" | "warning" => Ok(log::LevelFilter::Warn),
+        "info" => Ok(log::LevelFilter::Info),
+        "debug" => Ok(log::LevelFilter::Debug),
+        "trace" => Ok(log::LevelFilter::Trace),
+        _ => Err("must be one of: off, error, warn, info, debug, trace".to_owned()),
+    }
+}
 
+fn main() {
     let run_config = RunConfig::parse();
+    let log_level = if run_config.quiet || run_config.json_output {
+        log::LevelFilter::Off
+    } else {
+        run_config.log_level
+    };
+
+    SimpleLogger::new().with_level(log_level).init().unwrap();
 
     let seed = run_config
         .seed
@@ -253,12 +327,31 @@ fn main() {
                 process::exit(2);
             },
         );
-        println!("Metrics written to {}", metrics_path.display());
+        if !run_config.json_output {
+            println!("Metrics written to {}", metrics_path.display());
+        }
     }
 
     let best_chromosome = genetic_algorithm.get_best_chromosome();
     let worst_chromosome = genetic_algorithm.get_worst_chromosome();
     let population_size = genetic_algorithm.get_population_size();
+
+    if run_config.json_output {
+        print_run_summary_json(
+            &run_config,
+            seed,
+            &run_metrics,
+            best_chromosome,
+            worst_chromosome,
+            population_size,
+            run_config.metrics_csv.as_deref(),
+        )
+        .unwrap_or_else(|error| {
+            eprintln!("{error}");
+            process::exit(2);
+        });
+        return;
+    }
 
     log::info!("done running epoch");
     println!("--------------------------------");

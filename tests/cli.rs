@@ -5,6 +5,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use serde_json::Value;
+
 fn run_command(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_n_queens_problem"))
         .args(args)
@@ -107,6 +109,129 @@ fn fixed_seed_produces_deterministic_summary() {
     let second = run_success(&args);
 
     assert_eq!(stable_summary(&first), stable_summary(&second));
+}
+
+#[test]
+fn quiet_mode_suppresses_log_output() {
+    let output = run_success(&[
+        "--size",
+        "2",
+        "--population",
+        "8",
+        "--epochs",
+        "1",
+        "--seed",
+        "42",
+        "--no-board",
+        "--quiet",
+    ]);
+    let text = output_text(&output);
+
+    assert!(text.contains("Best  ="));
+    assert!(
+        !text.contains(" INFO "),
+        "quiet output should not include info logs:\n{text}"
+    );
+    assert!(
+        !text.contains(" WARN "),
+        "quiet output should not include warning logs:\n{text}"
+    );
+}
+
+#[test]
+fn log_level_warn_suppresses_info_logs() {
+    let output = run_success(&[
+        "--size",
+        "2",
+        "--population",
+        "8",
+        "--epochs",
+        "1",
+        "--seed",
+        "42",
+        "--no-board",
+        "--log-level",
+        "warn",
+    ]);
+    let text = output_text(&output);
+
+    assert!(
+        text.contains(" WARN "),
+        "warn-level output should include warnings:\n{text}"
+    );
+    assert!(
+        !text.contains(" INFO "),
+        "warn-level output should not include info logs:\n{text}"
+    );
+}
+
+#[test]
+fn cli_rejects_invalid_log_level() {
+    let output = run_command(&["--log-level", "verbose"]);
+
+    assert!(!output.status.success());
+    assert!(
+        output_text(&output).contains("must be one of: off, error, warn, info, debug, trace"),
+        "expected validation message, got:\n{}",
+        output_text(&output)
+    );
+}
+
+#[test]
+fn json_mode_emits_machine_readable_summary() {
+    let metrics_path = temp_metrics_path("json_metrics");
+    let metrics_path_string = metrics_path.display().to_string();
+    let output = run_success(&[
+        "--size",
+        "4",
+        "--population",
+        "8",
+        "--epochs",
+        "2",
+        "--seed",
+        "42",
+        "--mutation-rate",
+        "0",
+        "--elite-ratio",
+        "0.25",
+        "--offspring-ratio",
+        "0",
+        "--metrics-csv",
+        &metrics_path_string,
+        "--json",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !stdout.contains(" INFO "),
+        "JSON output should not include info logs:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains(" WARN "),
+        "JSON output should not include warning logs:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("Metrics written to"),
+        "JSON output should not include human metrics confirmation:\n{stdout}"
+    );
+
+    let summary = serde_json::from_str::<Value>(&stdout)
+        .unwrap_or_else(|error| panic!("stdout should be valid JSON: {error}\n{stdout}"));
+
+    assert_eq!(summary["seed"], 42);
+    assert_eq!(summary["board_size"], 4);
+    assert_eq!(summary["target_population"], 8);
+    assert_eq!(summary["max_epochs"], 2);
+    assert_eq!(summary["final_population"], 8);
+    assert_eq!(summary["metrics_csv"], metrics_path_string);
+    assert!(summary["elapsed_ms"].is_number());
+    assert!(summary["solved_epoch"].is_null() || summary["solved_epoch"].is_number());
+    assert!(summary["best_chromosome"]["positions"].is_array());
+    assert!(summary["best_chromosome"]["conflicts"].is_array());
+    assert!(summary["best_chromosome"]["conflicts_sum"].is_number());
+    assert!(summary["worst_chromosome"]["positions"].is_array());
+
+    fs::remove_file(&metrics_path).expect("temporary metrics CSV should be removable");
 }
 
 #[test]
