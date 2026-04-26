@@ -1,27 +1,38 @@
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 
-const ciPagesUrl = process.env.CI_PAGES_URL;
+const configuredSite = process.env.ASTRO_SITE ?? process.env.CI_PAGES_URL;
+const configuredBase = process.env.ASTRO_BASE;
 
-const base = (() => {
-  if (!ciPagesUrl) {
+function normalizeBase(base) {
+  if (!base || base === "/") {
+    return "/";
+  }
+
+  const withLeadingSlash = base.startsWith("/") ? base : `/${base}`;
+  return withLeadingSlash.endsWith("/")
+    ? withLeadingSlash
+    : `${withLeadingSlash}/`;
+}
+
+function baseFromPagesUrl(pagesUrl) {
+  if (!pagesUrl) {
     return "/";
   }
 
   try {
-    const pathname = new URL(ciPagesUrl).pathname;
-    if (!pathname || pathname === "/") {
-      return "/";
-    }
-
-    return pathname.endsWith("/") ? pathname : `${pathname}/`;
+    return normalizeBase(new URL(pagesUrl).pathname);
   } catch {
     return "/";
   }
-})();
+}
+
+const base = configuredBase
+  ? normalizeBase(configuredBase)
+  : baseFromPagesUrl(process.env.CI_PAGES_URL);
 
 export default defineConfig({
-  site: ciPagesUrl ?? "http://localhost:4321",
+  site: configuredSite ?? "http://localhost:4321",
   base,
   integrations: [
     starlight({
