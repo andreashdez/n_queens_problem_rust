@@ -45,10 +45,20 @@ cargo run --release -- -n 18 -p 40000 -e 5000 -s 42 -m 0.08 -r 0.10 -o 0.10
 
 If `--seed` is omitted, a random seed is generated and logged.
 
-Tune `--offspring-ratio` to control GA turnover. For example, `0.10` creates offspring equal to 10% of the target population before survivor selection.
-Tune `--min-diversity-ratio` to control diversity recovery. When unique chromosome diversity drops below the threshold, the solver refreshes non-elite chromosomes with random permutations.
-Use `--selection tournament` to choose parents by sampling `--tournament-size` candidates and mating the lowest-conflict chromosomes from those samples.
-Use `--local-search-rate` to enable a hybrid local-search pass that samples non-elites, tries bounded random swaps, and keeps only swaps that reduce conflicts.
+## Tuning guidance
+
+Run tuning experiments with `cargo run --release`, fixed `--seed` values, and either `--metrics-csv` or the `parameter_sweep` example. Compare configurations across multiple seeds by solve rate first, then median solved epoch and elapsed time.
+
+- Start from the defaults for `--size 18`, then change one family of parameters at a time.
+- Increase `--population` when runs fail because the search converges too early. Larger populations preserve more candidates but increase per-epoch work.
+- Increase `--epochs` when best conflicts are still improving near the limit. If the run is flat for many epochs, tune exploration instead of only adding epochs.
+- Adjust `--mutation-rate` in small steps. Lower values preserve good partial solutions; higher values explore more aggressively. The solver already boosts mutation during stagnation, so treat this as the base rate.
+- Adjust `--elite-ratio` to balance preserving winners against premature convergence. Higher values protect good chromosomes; lower values make survivor selection more exploratory.
+- Tune `--offspring-ratio` to control GA turnover. For example, `0.10` creates offspring equal to 10% of the target population before survivor selection. Higher values explore faster but add crossover work.
+- Tune `--min-diversity-ratio` when metrics show duplicate-heavy populations. If diversity drops below the threshold, the solver refreshes non-elite chromosomes with random permutations.
+- Use `--selection tournament` when roulette selection is slow to improve. Larger `--tournament-size` increases selection pressure but can reduce diversity.
+- Use `--local-search-rate` for harder boards when the GA often gets close but does not finish. Start low, such as `0.02` to `0.05`, and increase `--local-search-attempts` only if metrics show useful local-search improvements.
+- Lower population, offspring ratio, local-search rate, or local-search attempts when elapsed time is the limiting factor rather than solve rate.
 
 ## Parameter sweeps
 
