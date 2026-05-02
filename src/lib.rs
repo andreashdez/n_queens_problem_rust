@@ -1,2 +1,4 @@
 pub mod ga;
-pub mod ui;
+#[cfg(feature = "gui")]
+pub mod gui;
+pub mod tui;

@@ -23,6 +23,16 @@ Short aliases are also available:
 cargo run --release -- -n 18 -p 40000 -e 5000 -s 42 -m 0.08 -r 0.10 -o 0.10
 ```
 
+## GUI
+
+Run the native desktop GUI:
+
+```bash
+cargo run --release --features gui --bin n_queens_gui
+```
+
+The GUI exposes the solver parameters, runs the genetic algorithm on a background thread, supports cancellation, renders the best board, and charts conflict/diversity metrics as epochs complete.
+
 ## CLI options
 
 - `-n`, `--size <size>`: board size (number of queens). Default: `18`.

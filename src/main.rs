@@ -6,7 +6,7 @@ use std::{
 };
 
 use clap::{ArgAction, Parser};
-use n_queens_problem::{ga, ui};
+use n_queens_problem::{ga, tui};
 use rand::RngExt;
 use serde_json::json;
 use simple_logger::SimpleLogger;
@@ -466,7 +466,7 @@ fn main() {
             println!("Board size is 0; nothing to draw.");
         } else {
             let best_conflicts = best_chromosome.get_conflicts();
-            ui::draw_board(best_positions, best_conflicts);
+            tui::draw_board(best_positions, best_conflicts);
         }
     }
 

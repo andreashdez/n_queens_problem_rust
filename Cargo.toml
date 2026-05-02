@@ -10,10 +10,24 @@ simple_logger = "5.0"
 clap = { version = "4.5", features = ["derive"] }
 rayon = "1.10"
 serde_json = "1.0"
+eframe = { version = "0.33", optional = true, default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+
+[features]
+default = []
+gui = ["dep:eframe"]
 
 [dev-dependencies]
 criterion = "0.5"
 proptest = "1.6"
+
+[[bin]]
+name = "n_queens_problem"
+path = "src/main.rs"
+
+[[bin]]
+name = "n_queens_gui"
+path = "src/bin/n_queens_gui.rs"
+required-features = ["gui"]
 
 [[bench]]
 name = "ga"

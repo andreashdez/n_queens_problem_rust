@@ -132,6 +132,14 @@ pub struct RunMetrics {
     total_elapsed_ms: u128,
 }
 
+#[derive(Debug, Clone)]
+pub struct EpochSnapshot {
+    metrics: EpochMetrics,
+    best_positions: Vec<u16>,
+    best_conflicts: Vec<u32>,
+    best_conflicts_sum: u32,
+}
+
 impl RunMetrics {
     pub fn epochs(&self) -> &[EpochMetrics] {
         &self.epochs
@@ -171,6 +179,24 @@ impl RunMetrics {
 
     fn set_total_elapsed_ms(&mut self, total_elapsed_ms: u128) {
         self.total_elapsed_ms = total_elapsed_ms;
+    }
+}
+
+impl EpochSnapshot {
+    pub fn metrics(&self) -> &EpochMetrics {
+        &self.metrics
+    }
+
+    pub fn best_positions(&self) -> &[u16] {
+        &self.best_positions
+    }
+
+    pub fn best_conflicts(&self) -> &[u32] {
+        &self.best_conflicts
+    }
+
+    pub fn best_conflicts_sum(&self) -> u32 {
+        self.best_conflicts_sum
     }
 }
 
@@ -401,6 +427,13 @@ impl GeneticAlgorithm {
     }
 
     pub fn run_algorithm(&mut self) -> RunMetrics {
+        self.run_algorithm_with_progress(|_| true)
+    }
+
+    pub fn run_algorithm_with_progress<F>(&mut self, mut on_epoch: F) -> RunMetrics
+    where
+        F: FnMut(&EpochSnapshot) -> bool,
+    {
         let started_at = Instant::now();
         let mut run_metrics = RunMetrics::default();
 
@@ -431,6 +464,12 @@ impl GeneticAlgorithm {
         if best_conflicts_sum == 0 {
             log::info!("ga solved in initial population");
             run_metrics.mark_solved(0);
+            run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
+            self.report_latest_epoch(&run_metrics, &mut on_epoch);
+            return run_metrics;
+        }
+
+        if !self.report_latest_epoch(&run_metrics, &mut on_epoch) {
             run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
             return run_metrics;
         }
@@ -528,6 +567,7 @@ impl GeneticAlgorithm {
                 );
                 run_metrics.mark_solved(epoch_number);
                 run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
+                self.report_latest_epoch(&run_metrics, &mut on_epoch);
                 return run_metrics;
             }
 
@@ -535,6 +575,10 @@ impl GeneticAlgorithm {
                 log::info!(
                     "ga improvement epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4} local_search_improvements={local_search_improvements}",
                 );
+                if !self.report_latest_epoch(&run_metrics, &mut on_epoch) {
+                    run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
+                    return run_metrics;
+                }
                 continue;
             }
 
@@ -544,6 +588,11 @@ impl GeneticAlgorithm {
                 log::info!(
                     "ga progress epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} stagnant_epochs={stagnation_epochs} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4} local_search_improvements={local_search_improvements} diversity_replacements={diversity_replacements}",
                 );
+            }
+
+            if !self.report_latest_epoch(&run_metrics, &mut on_epoch) {
+                run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
+                return run_metrics;
             }
         }
 
@@ -555,6 +604,25 @@ impl GeneticAlgorithm {
 
         run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
         run_metrics
+    }
+
+    fn report_latest_epoch<F>(&self, run_metrics: &RunMetrics, on_epoch: &mut F) -> bool
+    where
+        F: FnMut(&EpochSnapshot) -> bool,
+    {
+        let Some(metrics) = run_metrics.epochs().last() else {
+            return true;
+        };
+
+        let best_chromosome = self.get_best_chromosome();
+        let snapshot = EpochSnapshot {
+            metrics: metrics.clone(),
+            best_positions: best_chromosome.get_positions().to_vec(),
+            best_conflicts: best_chromosome.get_conflicts().to_vec(),
+            best_conflicts_sum: best_chromosome.get_conflicts_sum(),
+        };
+
+        on_epoch(&snapshot)
     }
 
     pub fn get_best_chromosome(&self) -> &Chromosome {
@@ -1473,6 +1541,31 @@ mod tests {
         assert_eq!(initial_epoch.local_search_improvements(), 0);
         assert_eq!(initial_epoch.stagnation_epochs(), 0);
         assert_eq!(initial_epoch.diversity_replacements(), 0);
+    }
+
+    #[test]
+    fn test_run_algorithm_with_progress_reports_snapshots_and_can_cancel() {
+        let mut genetic_algorithm = build_genetic_algorithm(
+            GaConfig::new(3, 8, 5, 42)
+                .with_mutation_rate(DEFAULT_MUTATION_RATE)
+                .with_elite_ratio(DEFAULT_ELITE_RATIO),
+        );
+        let mut snapshots = Vec::new();
+
+        let run_metrics = genetic_algorithm.run_algorithm_with_progress(|snapshot| {
+            snapshots.push(snapshot.clone());
+            false
+        });
+
+        assert_eq!(run_metrics.epochs().len(), 1);
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].metrics().epoch(), 0);
+        assert_eq!(snapshots[0].best_positions().len(), 3);
+        assert_eq!(snapshots[0].best_conflicts().len(), 3);
+        assert_eq!(
+            snapshots[0].best_conflicts_sum(),
+            run_metrics.epochs()[0].best_conflicts_sum()
+        );
     }
 
     #[test]
