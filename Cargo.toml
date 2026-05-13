@@ -2,6 +2,7 @@
 name = "n_queens_problem"
 version = "0.1.0"
 edition = "2024"
+default-run = "n_queens_problem"
 
 [dependencies]
 rand = "0.10"

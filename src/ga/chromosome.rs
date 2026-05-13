@@ -1,6 +1,6 @@
 use rand::{Rng, RngExt, seq::SliceRandom};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Chromosome {
     positions: Vec<u16>,
     conflicts: Vec<u32>,
