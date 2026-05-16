@@ -19,6 +19,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
     - name: Install rustfmt and clippy
       run: rustup component add rustfmt clippy
     - name: Cache Rust dependencies and build output
@@ -31,8 +36,14 @@ jobs:
       run: cargo clippy --all-targets --all-features -- -D warnings
     - name: Build
       run: cargo build --verbose
-    - name: Run tests
+    - name: Run default-feature tests
       run: cargo test --verbose
+    - name: Run all-features tests
+      run: cargo test --all-features --verbose
+    - name: Install docs dependencies
+      run: npm ci
+    - name: Check docs
+      run: npm run check
 
   clippy-sarif:
     name: Clippy SARIF analysis

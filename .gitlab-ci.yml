@@ -15,6 +15,7 @@ test:cargo:
     - cargo fmt --check
     - cargo clippy --all-targets --all-features -- -D warnings
     - cargo test --workspace --verbose
+    - cargo test --workspace --all-features --verbose
 
 # Optional: Use a third party library to generate gitlab junit reports
 # test:junit-report:
@@ -37,6 +38,7 @@ pages:
   image: node:22
   script:
     - npm ci
+    - npm run check
     - npm run build
     - rm -rf public
     - mv dist public
