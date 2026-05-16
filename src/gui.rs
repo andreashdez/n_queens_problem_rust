@@ -229,7 +229,9 @@ impl NQueensApp {
                 ui.label("Board size");
                 ui.add_enabled(
                     !is_running,
-                    egui::DragValue::new(&mut self.config.board_size).speed(1.0),
+                    egui::DragValue::new(&mut self.config.board_size)
+                        .speed(1.0)
+                        .range(1..=u16::MAX),
                 );
                 ui.end_row();
 
@@ -550,7 +552,13 @@ fn spawn_solver(config: GuiConfig) -> (Receiver<WorkerMessage>, Arc<AtomicBool>)
             }
         };
 
-        let mut algorithm = ga::build_genetic_algorithm(ga_config);
+        let mut algorithm = match ga::build_genetic_algorithm(ga_config) {
+            Ok(algorithm) => algorithm,
+            Err(error) => {
+                let _ = sender.send(WorkerMessage::Failed(format!("Invalid GA config: {error}")));
+                return;
+            }
+        };
         let progress_sender = sender.clone();
         let run_metrics = algorithm.run_algorithm_with_progress(|snapshot| {
             if cancel_worker.load(Ordering::Relaxed) {

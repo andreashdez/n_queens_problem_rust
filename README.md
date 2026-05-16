@@ -32,7 +32,7 @@ The GUI exposes the solver parameters, runs the genetic algorithm on a backgroun
 
 ## CLI options
 
-- `-n`, `--size <size>`: board size (number of queens). Default: `18`.
+- `-n`, `--size <size>`: board size (number of queens, must be greater than 0). Default: `18`.
 - `-p`, `--population <count>`: initial and target population size. Default: `40000`.
 - `-e`, `--epochs <count>`: maximum GA epochs. Default: `5000`.
 - `-s`, `--seed <u64>`: optional deterministic RNG seed.
@@ -94,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_local_search_attempts(8)
         .validated()?;
 
-    let mut algorithm = ga::build_genetic_algorithm(config);
+    let mut algorithm = ga::build_genetic_algorithm(config)?;
     let metrics = algorithm.run_algorithm();
 
     println!(
@@ -107,7 +107,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Use `GaConfig::validated()` or `GaConfig::try_new()` to get explicit errors for invalid public configuration values.
+Use `GaConfig::validated()` or `GaConfig::try_new()` to check configuration before building. `ga::build_genetic_algorithm()` also validates its input and returns an error for invalid public configuration values.
 
 ## Docs site (Astro)
 

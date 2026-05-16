@@ -36,7 +36,8 @@ struct RunConfig {
         long = "size",
         value_name = "SIZE",
         default_value_t = DEFAULT_BOARD_SIZE,
-        help = "Board size (number of queens)"
+        value_parser = parse_positive_u16,
+        help = "Board size (number of queens, must be greater than 0)"
     )]
     board_size: u16,
     #[arg(
@@ -311,6 +312,18 @@ fn parse_positive_usize(raw_value: &str) -> Result<usize, String> {
     Ok(value)
 }
 
+fn parse_positive_u16(raw_value: &str) -> Result<u16, String> {
+    let value = raw_value
+        .parse::<u16>()
+        .map_err(|err| format!("invalid value `{raw_value}`: {err}"))?;
+
+    if value == 0 {
+        return Err("must be greater than 0".to_owned());
+    }
+
+    Ok(value)
+}
+
 fn parse_usize(raw_value: &str) -> Result<usize, String> {
     raw_value
         .parse::<usize>()
@@ -410,7 +423,10 @@ fn main() {
         run_config.draw_board,
     );
 
-    let mut genetic_algorithm = ga::build_genetic_algorithm(ga_config);
+    let mut genetic_algorithm = ga::build_genetic_algorithm(ga_config).unwrap_or_else(|error| {
+        eprintln!("invalid GA config: {error}");
+        process::exit(2);
+    });
 
     log::info!("done building genetic algorithm");
     let run_metrics = genetic_algorithm.run_algorithm();
@@ -462,12 +478,8 @@ fn main() {
         println!("Board rendering disabled (--no-board).");
     } else {
         let best_positions = best_chromosome.get_positions();
-        if best_positions.is_empty() {
-            println!("Board size is 0; nothing to draw.");
-        } else {
-            let best_conflicts = best_chromosome.get_conflicts();
-            tui::draw_board(best_positions, best_conflicts);
-        }
+        let best_conflicts = best_chromosome.get_conflicts();
+        tui::draw_board(best_positions, best_conflicts);
     }
 
     log::info!("done n_queens_problem");

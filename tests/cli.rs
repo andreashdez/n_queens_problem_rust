@@ -79,7 +79,7 @@ fn cli_rejects_zero_board_size() {
 
     assert!(!output.status.success());
     assert!(
-        output_text(&output).contains("invalid GA config: board size must be greater than 0"),
+        output_text(&output).contains("must be greater than 0"),
         "expected validation message, got:\n{}",
         output_text(&output)
     );

@@ -232,7 +232,7 @@ fn run_single_seed(case: SweepCase, seed: u64) -> Result<SweepRun, ga::GaConfigE
         .validated()?;
 
     let started_at = Instant::now();
-    let mut algorithm = ga::build_genetic_algorithm(config);
+    let mut algorithm = ga::build_genetic_algorithm(config)?;
     let metrics = algorithm.run_algorithm();
 
     Ok(SweepRun {

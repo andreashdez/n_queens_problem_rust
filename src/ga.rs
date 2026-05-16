@@ -1058,16 +1058,10 @@ impl GeneticAlgorithm {
     }
 }
 
-pub fn build_genetic_algorithm(config: GaConfig) -> GeneticAlgorithm {
-    let target_population_size = config.initial_population.max(1);
-    let mutation_rate = normalize_unit_interval(config.mutation_rate, DEFAULT_MUTATION_RATE);
-    let elite_ratio = normalize_unit_interval(config.elite_ratio, DEFAULT_ELITE_RATIO);
-    let offspring_ratio = normalize_unit_interval(config.offspring_ratio, DEFAULT_OFFSPRING_RATIO);
-    let min_diversity_ratio =
-        normalize_unit_interval(config.min_diversity_ratio, DEFAULT_MIN_DIVERSITY_RATIO);
-    let local_search_rate =
-        normalize_unit_interval(config.local_search_rate, DEFAULT_LOCAL_SEARCH_RATE);
-    let tournament_size = config.tournament_size.max(1);
+pub fn build_genetic_algorithm(config: GaConfig) -> Result<GeneticAlgorithm, GaConfigError> {
+    config.validate()?;
+
+    let target_population_size = config.initial_population;
     let mut rng = StdRng::seed_from_u64(config.seed);
     let mut population: Vec<Chromosome> = Vec::with_capacity(target_population_size);
 
@@ -1077,22 +1071,22 @@ pub fn build_genetic_algorithm(config: GaConfig) -> GeneticAlgorithm {
         population.push(chromosome);
     }
 
-    GeneticAlgorithm::new(
+    Ok(GeneticAlgorithm::new(
         population,
         rng,
         GeneticAlgorithmParams {
             target_population_size,
             max_epoch_count: config.max_epoch_count,
-            mutation_rate,
-            elite_ratio,
-            offspring_ratio,
-            min_diversity_ratio,
+            mutation_rate: config.mutation_rate,
+            elite_ratio: config.elite_ratio,
+            offspring_ratio: config.offspring_ratio,
+            min_diversity_ratio: config.min_diversity_ratio,
             selection_strategy: config.selection_strategy,
-            tournament_size,
-            local_search_rate,
+            tournament_size: config.tournament_size,
+            local_search_rate: config.local_search_rate,
             local_search_attempts: config.local_search_attempts,
         },
-    )
+    ))
 }
 
 fn offspring_count_for_population(target_population_size: usize, offspring_ratio: f32) -> usize {
@@ -1558,22 +1552,36 @@ mod tests {
     }
 
     #[test]
-    fn test_build_algorithm_handles_n_zero_and_one() {
-        let mut zero_board = build_genetic_algorithm(
-            GaConfig::new(0, 8, 10, 42)
-                .with_mutation_rate(DEFAULT_MUTATION_RATE)
-                .with_elite_ratio(DEFAULT_ELITE_RATIO),
-        );
-        zero_board.run_algorithm();
-        assert_eq!(zero_board.get_best_chromosome().get_conflicts_sum(), 0);
+    fn test_build_algorithm_rejects_zero_and_handles_one() {
+        assert!(matches!(
+            build_genetic_algorithm(
+                GaConfig::new(0, 8, 10, 42)
+                    .with_mutation_rate(DEFAULT_MUTATION_RATE)
+                    .with_elite_ratio(DEFAULT_ELITE_RATIO),
+            ),
+            Err(GaConfigError::BoardSizeZero)
+        ));
 
         let mut one_board = build_genetic_algorithm(
             GaConfig::new(1, 8, 10, 42)
                 .with_mutation_rate(DEFAULT_MUTATION_RATE)
                 .with_elite_ratio(DEFAULT_ELITE_RATIO),
-        );
+        )
+        .expect("valid config should build");
         one_board.run_algorithm();
         assert_eq!(one_board.get_best_chromosome().get_conflicts_sum(), 0);
+    }
+
+    #[test]
+    fn test_build_algorithm_validates_public_config() {
+        assert!(matches!(
+            build_genetic_algorithm(
+                GaConfig::new(8, 8, 10, 42)
+                    .with_mutation_rate(f32::NAN)
+                    .with_elite_ratio(DEFAULT_ELITE_RATIO),
+            ),
+            Err(GaConfigError::InvalidMutationRate)
+        ));
     }
 
     #[test]
@@ -1582,7 +1590,8 @@ mod tests {
             GaConfig::new(8, 32, 5, 42)
                 .with_mutation_rate(DEFAULT_MUTATION_RATE)
                 .with_elite_ratio(DEFAULT_ELITE_RATIO),
-        );
+        )
+        .expect("valid config should build");
 
         let run_metrics = genetic_algorithm.run_algorithm();
         assert!(!run_metrics.epochs().is_empty());
@@ -1609,7 +1618,8 @@ mod tests {
             GaConfig::new(3, 8, 5, 42)
                 .with_mutation_rate(DEFAULT_MUTATION_RATE)
                 .with_elite_ratio(DEFAULT_ELITE_RATIO),
-        );
+        )
+        .expect("valid config should build");
         let mut snapshots = Vec::new();
 
         let run_metrics = genetic_algorithm.run_algorithm_with_progress(|snapshot| {
@@ -1635,7 +1645,8 @@ mod tests {
                 .with_mutation_rate(0.0)
                 .with_elite_ratio(0.25)
                 .with_offspring_ratio(0.0),
-        );
+        )
+        .expect("valid config should build");
 
         let run_metrics = genetic_algorithm.run_algorithm();
 
@@ -1664,7 +1675,8 @@ mod tests {
                 .with_mutation_rate(1.0)
                 .with_elite_ratio(0.0)
                 .with_offspring_ratio(1.0),
-        );
+        )
+        .expect("valid config should build");
 
         let run_metrics = genetic_algorithm.run_algorithm();
         let best_seen_conflicts = run_metrics
@@ -1689,10 +1701,11 @@ mod tests {
     #[test]
     fn test_run_metrics_mark_initial_solve_epoch() {
         let mut genetic_algorithm = build_genetic_algorithm(
-            GaConfig::new(0, 8, 10, 42)
+            GaConfig::new(1, 8, 10, 42)
                 .with_mutation_rate(DEFAULT_MUTATION_RATE)
                 .with_elite_ratio(DEFAULT_ELITE_RATIO),
-        );
+        )
+        .expect("valid config should build");
 
         let run_metrics = genetic_algorithm.run_algorithm();
         assert_eq!(run_metrics.solved_epoch(), Some(0));

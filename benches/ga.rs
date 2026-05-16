@@ -51,6 +51,7 @@ fn benchmark_epoch_loop(c: &mut Criterion) {
                             .with_mutation_rate(ga::DEFAULT_MUTATION_RATE)
                             .with_elite_ratio(ga::DEFAULT_ELITE_RATIO),
                     )
+                    .expect("benchmark config should be valid")
                 },
                 |mut algorithm| {
                     algorithm.run_algorithm();
