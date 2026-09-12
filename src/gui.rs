@@ -510,10 +510,14 @@ impl Drop for NQueensApp {
 }
 
 impl eframe::App for NQueensApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_worker_messages(ctx);
+    }
 
-        egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+
+        egui::Panel::top("top_bar").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("N-Queens Genetic Solver").strong().size(18.0));
                 ui.separator();
@@ -521,16 +525,16 @@ impl eframe::App for NQueensApp {
             });
         });
 
-        egui::SidePanel::left("controls")
+        egui::Panel::left("controls")
             .resizable(false)
-            .default_width(315.0)
-            .show(ctx, |ui| {
+            .default_size(315.0)
+            .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    self.draw_controls(ui, ctx);
+                    self.draw_controls(ui, &ctx);
                 });
             });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 self.draw_main_panel(ui);
             });
