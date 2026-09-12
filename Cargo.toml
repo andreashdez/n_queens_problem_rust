@@ -16,6 +16,7 @@ eframe = { version = "0.36", optional = true, default-features = false, features
 [features]
 default = []
 gui = ["dep:eframe"]
+bench-internals = []
 
 [dev-dependencies]
 criterion = "0.8"

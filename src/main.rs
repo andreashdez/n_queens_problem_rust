@@ -165,6 +165,10 @@ struct RunConfig {
         help = "Print a machine-readable JSON summary"
     )]
     json_output: bool,
+    #[arg(long, help = "Evolve unsolvable sizes 2 and 3 for experiments")]
+    allow_unsolvable: bool,
+    #[arg(long, help = "Include cumulative solver phase timings in the summary")]
+    profile: bool,
 }
 
 fn chromosome_json(chromosome: &ga::chromosome::Chromosome) -> serde_json::Value {
@@ -213,6 +217,9 @@ fn print_run_summary_json(
             .unwrap_or_default(),
         "elapsed_ms": run_metrics.total_elapsed_ms(),
         "solved_epoch": run_metrics.solved_epoch(),
+        "stop_reason": run_metrics.stop_reason().to_string(),
+        "allow_unsolvable": run_config.allow_unsolvable,
+        "phase_timings": run_metrics.phase_timings().map(ga::PhaseTimings::to_json),
         "metrics_csv": metrics_csv.map(|path| path.display().to_string()),
         "best_chromosome": chromosome_json(best_chromosome),
         "worst_chromosome": chromosome_json(worst_chromosome),
@@ -251,7 +258,7 @@ fn write_run_metrics_csv(
 
     writeln!(
         metrics_file,
-        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,local_search_rate,local_search_attempts,epoch,best_conflicts_sum,population_size,elapsed_ms,average_conflicts_sum,unique_chromosomes,diversity_ratio,epoch_mutation_rate,epoch_elite_ratio,offspring_count,local_search_improvements,stagnation_epochs,diversity_replacements"
+        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,local_search_rate,local_search_attempts,epoch,best_conflicts_sum,population_size,elapsed_ms,average_conflicts_sum,unique_chromosomes,diversity_ratio,epoch_mutation_rate,epoch_elite_ratio,offspring_count,local_search_improvements,stagnation_epochs,diversity_replacements,stop_reason,allow_unsolvable"
     )
     .map_err(|error| {
         format!(
@@ -263,7 +270,7 @@ fn write_run_metrics_csv(
     for epoch_metrics in run_metrics.epochs() {
         writeln!(
             metrics_file,
-            "{seed},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{seed},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             run_config.board_size,
             run_config.population_size,
             run_config.max_epochs,
@@ -288,6 +295,8 @@ fn write_run_metrics_csv(
             epoch_metrics.local_search_improvements(),
             epoch_metrics.stagnation_epochs(),
             epoch_metrics.diversity_replacements(),
+            run_metrics.stop_reason(),
+            run_config.allow_unsolvable,
         )
         .map_err(|error| {
             format!(
@@ -429,7 +438,14 @@ fn main() {
     });
 
     log::info!("done building genetic algorithm");
-    let run_metrics = genetic_algorithm.run_algorithm();
+    let run_metrics = genetic_algorithm.run_algorithm_with_options(
+        ga::RunOptions {
+            allow_unsolvable: run_config.allow_unsolvable,
+            profile: run_config.profile,
+            collect_history: run_config.metrics_csv.is_some(),
+        },
+        |_| true,
+    );
 
     if let Some(metrics_path) = run_config.metrics_csv.as_deref() {
         write_run_metrics_csv(metrics_path, &run_config, seed, &run_metrics).unwrap_or_else(
@@ -470,6 +486,10 @@ fn main() {
     println!("Worst = {worst_chromosome:?}");
     println!("Final Population: {population_size}");
     println!("Elapsed (ms): {}", run_metrics.total_elapsed_ms());
+    println!("Stop reason: {}", run_metrics.stop_reason());
+    if let Some(timings) = run_metrics.phase_timings() {
+        println!("Phase timings (ns): {}", timings.to_json());
+    }
     if let Some(solved_epoch) = run_metrics.solved_epoch() {
         println!("Solved Epoch: {solved_epoch}");
     }

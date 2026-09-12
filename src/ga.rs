@@ -134,11 +134,95 @@ impl EpochMetrics {
     }
 }
 
+/// Why a run stopped. Finding a solution takes precedence over callback cancellation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum StopReason {
+    Solved,
+    #[default]
+    EpochLimit,
+    Cancelled,
+    Unsolvable,
+}
+
+impl fmt::Display for StopReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Solved => "solved",
+            Self::EpochLimit => "epoch_limit",
+            Self::Cancelled => "cancelled",
+            Self::Unsolvable => "unsolvable",
+        })
+    }
+}
+
+/// Controls observation and termination without changing the GA's random sequence.
+#[derive(Debug, Clone, Copy)]
+pub struct RunOptions {
+    /// Evolve boards of size 2 or 3 for experiments despite their known impossibility.
+    pub allow_unsolvable: bool,
+    /// Retain every epoch; when false, retain only the latest metrics.
+    pub collect_history: bool,
+    /// Measure cumulative wall time of solver phases, excluding population construction.
+    pub profile: bool,
+}
+
+impl Default for RunOptions {
+    fn default() -> Self {
+        Self {
+            allow_unsolvable: false,
+            collect_history: true,
+            profile: false,
+        }
+    }
+}
+
+/// Cumulative wall-clock nanoseconds. Phases do not overlap; bookkeeping and callbacks
+/// are excluded. Population metrics include the uniqueness HashSet construction.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PhaseTimings {
+    pub crossover_ns: u128,
+    pub mutation_ns: u128,
+    pub local_search_ns: u128,
+    pub survivor_selection_ns: u128,
+    pub fitness_ns: u128,
+    pub population_metrics_ns: u128,
+    pub diversity_refresh_ns: u128,
+    pub restart_ns: u128,
+}
+
+impl PhaseTimings {
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "crossover_ns": self.crossover_ns,
+            "mutation_ns": self.mutation_ns,
+            "local_search_ns": self.local_search_ns,
+            "survivor_selection_ns": self.survivor_selection_ns,
+            "fitness_ns": self.fitness_ns,
+            "population_metrics_ns": self.population_metrics_ns,
+            "diversity_refresh_ns": self.diversity_refresh_ns,
+            "restart_ns": self.restart_ns,
+        })
+    }
+}
+
+fn measure<T>(enabled: bool, total_ns: &mut u128, work: impl FnOnce() -> T) -> T {
+    let start = enabled.then(Instant::now);
+    let result = work();
+    if let Some(start) = start {
+        *total_ns += start.elapsed().as_nanos();
+    }
+    result
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RunMetrics {
     epochs: Vec<EpochMetrics>,
     solved_epoch: Option<u32>,
     total_elapsed_ms: u128,
+    stop_reason: StopReason,
+    phase_timings: PhaseTimings,
+    profile: bool,
+    latest_only: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +234,15 @@ pub struct EpochSnapshot {
 }
 
 impl RunMetrics {
+    pub fn stop_reason(&self) -> StopReason {
+        self.stop_reason
+    }
+
+    /// None when profiling was not requested.
+    pub fn phase_timings(&self) -> Option<&PhaseTimings> {
+        self.profile.then_some(&self.phase_timings)
+    }
+
     pub fn epochs(&self) -> &[EpochMetrics] {
         &self.epochs
     }
@@ -168,6 +261,9 @@ impl RunMetrics {
         population_metrics: PopulationMetrics,
         context: EpochRecordContext,
     ) {
+        if self.latest_only {
+            self.epochs.clear();
+        }
         self.epochs.push(EpochMetrics {
             epoch,
             best_conflicts_sum: population_metrics.best_conflicts_sum,
@@ -186,6 +282,7 @@ impl RunMetrics {
 
     fn mark_solved(&mut self, solved_epoch: u32) {
         self.solved_epoch = Some(solved_epoch);
+        self.stop_reason = StopReason::Solved;
     }
 
     fn set_total_elapsed_ms(&mut self, total_elapsed_ms: u128) {
@@ -443,12 +540,29 @@ impl GeneticAlgorithm {
         self.run_algorithm_with_progress(|_| true)
     }
 
-    pub fn run_algorithm_with_progress<F>(&mut self, mut on_epoch: F) -> RunMetrics
+    pub fn run_algorithm_with_progress<F>(&mut self, on_epoch: F) -> RunMetrics
+    where
+        F: FnMut(&EpochSnapshot) -> bool,
+    {
+        self.run_algorithm_with_options(RunOptions::default(), on_epoch)
+    }
+
+    /// Reports epoch zero and each completed epoch. Returning false requests cancellation.
+    /// Known impossible boards stop after epoch zero unless `allow_unsolvable` is set.
+    pub fn run_algorithm_with_options<F>(
+        &mut self,
+        options: RunOptions,
+        mut on_epoch: F,
+    ) -> RunMetrics
     where
         F: FnMut(&EpochSnapshot) -> bool,
     {
         let started_at = Instant::now();
-        let mut run_metrics = RunMetrics::default();
+        let mut run_metrics = RunMetrics {
+            profile: options.profile,
+            latest_only: !options.collect_history,
+            ..RunMetrics::default()
+        };
 
         if self.population.is_empty() {
             log::warn!("cannot run algorithm with empty population");
@@ -456,8 +570,16 @@ impl GeneticAlgorithm {
             return run_metrics;
         }
 
-        self.calc_fitness();
-        let initial_population_metrics = population_metrics(&self.population);
+        measure(
+            options.profile,
+            &mut run_metrics.phase_timings.fitness_ns,
+            || self.calc_fitness(),
+        );
+        let initial_population_metrics = measure(
+            options.profile,
+            &mut run_metrics.phase_timings.population_metrics_ns,
+            || population_metrics(&self.population),
+        );
         self.update_best_chromosome(initial_population_metrics);
         let mut best_conflicts_sum = self.get_best_chromosome().get_conflicts_sum();
         let offspring_count =
@@ -487,6 +609,14 @@ impl GeneticAlgorithm {
         }
 
         if !self.report_latest_epoch(&run_metrics, &mut on_epoch) {
+            run_metrics.stop_reason = StopReason::Cancelled;
+            run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
+            return run_metrics;
+        }
+
+        if !options.allow_unsolvable && matches!(self.population[0].get_positions().len(), 2 | 3) {
+            log::warn!("board size has no solution; use allow_unsolvable for experiments");
+            run_metrics.stop_reason = StopReason::Unsolvable;
             run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
             return run_metrics;
         }
@@ -520,10 +650,22 @@ impl GeneticAlgorithm {
                     stagnation_epochs,
                     stagnation_reset_interval,
                 );
-                let replaced_count = self.soft_restart_population(reset_elite_ratio);
-                self.calc_fitness();
+                let replaced_count = measure(
+                    options.profile,
+                    &mut run_metrics.phase_timings.restart_ns,
+                    || self.soft_restart_population(reset_elite_ratio),
+                );
+                measure(
+                    options.profile,
+                    &mut run_metrics.phase_timings.fitness_ns,
+                    || self.calc_fitness(),
+                );
 
-                let post_reset_population_metrics = population_metrics(&self.population);
+                let post_reset_population_metrics = measure(
+                    options.profile,
+                    &mut run_metrics.phase_timings.population_metrics_ns,
+                    || population_metrics(&self.population),
+                );
                 self.update_best_chromosome(post_reset_population_metrics);
                 let post_reset_best_conflicts_sum =
                     post_reset_population_metrics.best_conflicts_sum;
@@ -545,21 +687,58 @@ impl GeneticAlgorithm {
                 stagnation_reset_interval,
             );
 
-            self.mate_random_chromosomes(offspring_count);
-            self.mutate_population(epoch_mutation_rate, epoch_elite_ratio);
-            let local_search_improvements =
-                self.improve_population_with_local_search(epoch_elite_ratio);
-            self.select_survivors(epoch_elite_ratio);
-            self.calc_fitness();
+            measure(
+                options.profile,
+                &mut run_metrics.phase_timings.crossover_ns,
+                || self.mate_random_chromosomes(offspring_count),
+            );
+            measure(
+                options.profile,
+                &mut run_metrics.phase_timings.mutation_ns,
+                || self.mutate_population(epoch_mutation_rate, epoch_elite_ratio),
+            );
+            let local_search_improvements = measure(
+                options.profile,
+                &mut run_metrics.phase_timings.local_search_ns,
+                || self.improve_population_with_local_search(epoch_elite_ratio),
+            );
+            measure(
+                options.profile,
+                &mut run_metrics.phase_timings.survivor_selection_ns,
+                || self.select_survivors(epoch_elite_ratio),
+            );
+            measure(
+                options.profile,
+                &mut run_metrics.phase_timings.fitness_ns,
+                || self.calc_fitness(),
+            );
 
-            let mut epoch_population_metrics = population_metrics(&self.population);
-            let diversity_replacements = self.refresh_low_diversity_population(
-                epoch_elite_ratio,
-                epoch_population_metrics.unique_chromosomes,
+            let mut epoch_population_metrics = measure(
+                options.profile,
+                &mut run_metrics.phase_timings.population_metrics_ns,
+                || population_metrics(&self.population),
+            );
+            let diversity_replacements = measure(
+                options.profile,
+                &mut run_metrics.phase_timings.diversity_refresh_ns,
+                || {
+                    self.refresh_low_diversity_population(
+                        epoch_elite_ratio,
+                        epoch_population_metrics.unique_chromosomes,
+                    )
+                },
             );
             if diversity_replacements > 0 {
-                self.calc_fitness();
-                epoch_population_metrics = population_metrics(&self.population);
+                measure(
+                    options.profile,
+                    &mut run_metrics.phase_timings.fitness_ns,
+                    || self.calc_fitness(),
+                );
+                epoch_population_metrics = measure(
+                    options.profile,
+                    &mut run_metrics.phase_timings.population_metrics_ns,
+                    || population_metrics(&self.population),
+                );
             }
 
             let epoch_best_conflicts_sum = epoch_population_metrics.best_conflicts_sum;
@@ -605,6 +784,7 @@ impl GeneticAlgorithm {
                     "ga improvement epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4} local_search_improvements={local_search_improvements}",
                 );
                 if !self.report_latest_epoch(&run_metrics, &mut on_epoch) {
+                    run_metrics.stop_reason = StopReason::Cancelled;
                     run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
                     return run_metrics;
                 }
@@ -620,6 +800,7 @@ impl GeneticAlgorithm {
             }
 
             if !self.report_latest_epoch(&run_metrics, &mut on_epoch) {
+                run_metrics.stop_reason = StopReason::Cancelled;
                 run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
                 return run_metrics;
             }
@@ -748,6 +929,7 @@ impl GeneticAlgorithm {
             self.tournament_size,
         );
 
+        let mut offspring = Vec::with_capacity(offspring_count);
         for _ in 0..offspring_count {
             let Some(parent_one_index) = self.select_parent_index(roulette_selection.as_ref().map(
                 |(cumulative_fitness, fitness_sum)| (cumulative_fitness.as_slice(), *fitness_sum),
@@ -767,8 +949,9 @@ impl GeneticAlgorithm {
                 population[parent_two_index].get_positions(),
                 rng,
             );
-            self.population.push(child);
+            offspring.push(child);
         }
+        self.population.extend(offspring);
     }
 
     fn select_parent_index(&mut self, roulette_selection: Option<(&[f32], f32)>) -> Option<usize> {
@@ -1395,6 +1578,35 @@ fn find_position(
     }
 }
 
+/// Unstable hooks for the phase benchmarks; not part of the solver API.
+#[cfg(feature = "bench-internals")]
+#[doc(hidden)]
+pub mod benchmarking {
+    use super::*;
+
+    pub fn prepare(algorithm: &mut GeneticAlgorithm) {
+        algorithm.calc_fitness();
+    }
+    pub fn crossover(algorithm: &mut GeneticAlgorithm) -> usize {
+        let count = offspring_count_for_population(
+            algorithm.target_population_size,
+            algorithm.offspring_ratio,
+        );
+        algorithm.mate_random_chromosomes(count);
+        algorithm.population.len()
+    }
+    pub fn mutation(algorithm: &mut GeneticAlgorithm) -> usize {
+        algorithm.mutate_population(algorithm.mutation_rate, algorithm.elite_ratio);
+        algorithm.population.len()
+    }
+    pub fn local_search(algorithm: &mut GeneticAlgorithm) -> usize {
+        algorithm.improve_population_with_local_search(algorithm.elite_ratio)
+    }
+    pub fn diversity_metrics(algorithm: &mut GeneticAlgorithm) -> usize {
+        population_metrics(&algorithm.population).unique_chromosomes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
@@ -1407,6 +1619,120 @@ mod tests {
         GeneticAlgorithm, GeneticAlgorithmParams, SelectionStrategy, build_genetic_algorithm,
         chromosome::Chromosome, pmx,
     };
+
+    #[test]
+    fn offspring_only_use_parents_from_the_start_of_mating() {
+        for strategy in [SelectionStrategy::Roulette, SelectionStrategy::Tournament] {
+            for seed in 0..16 {
+                let config = GaConfig::new(8, 8, 1, seed).with_selection_strategy(strategy);
+                let mut actual = build_genetic_algorithm(config).unwrap();
+                let mut parents = build_genetic_algorithm(config).unwrap();
+                actual.calc_fitness();
+                parents.calc_fitness();
+                let cumulative = super::cumulative_fitness(&parents.population);
+                let total = *cumulative.last().unwrap();
+                let expected: Vec<_> = (0..32)
+                    .map(|_| {
+                        let first = parents
+                            .select_parent_index(Some((&cumulative, total)))
+                            .unwrap();
+                        let second = parents
+                            .select_parent_index(Some((&cumulative, total)))
+                            .unwrap();
+                        super::mate_chromosomes(
+                            parents.population[first].get_positions(),
+                            parents.population[second].get_positions(),
+                            &mut parents.rng,
+                        )
+                        .get_positions()
+                        .to_vec()
+                    })
+                    .collect();
+                actual.mate_random_chromosomes(32);
+                let children: Vec<_> = actual.population[8..]
+                    .iter()
+                    .map(|c| c.get_positions().to_vec())
+                    .collect();
+                assert_eq!(children, expected, "strategy={strategy} seed={seed}");
+            }
+        }
+    }
+
+    #[test]
+    fn stop_reasons_cover_solve_impossibility_budget_and_cancellation() {
+        use super::{RunOptions, StopReason};
+        let mut solved = build_genetic_algorithm(GaConfig::new(1, 1, 2, 42)).unwrap();
+        assert_eq!(
+            solved.run_algorithm_with_progress(|_| false).stop_reason(),
+            StopReason::Solved
+        );
+        for size in [2, 3] {
+            let config = GaConfig::new(size, 8, 3, 42);
+            let result = build_genetic_algorithm(config).unwrap().run_algorithm();
+            assert_eq!(result.stop_reason(), StopReason::Unsolvable);
+            assert_eq!(result.epochs().len(), 1);
+            let options = RunOptions {
+                allow_unsolvable: true,
+                ..Default::default()
+            };
+            let result = build_genetic_algorithm(config)
+                .unwrap()
+                .run_algorithm_with_options(options, |_| true);
+            assert_eq!(result.stop_reason(), StopReason::EpochLimit);
+            assert_eq!(result.epochs().last().unwrap().epoch(), 3);
+            for stop_at in [0, 1] {
+                let result = build_genetic_algorithm(config)
+                    .unwrap()
+                    .run_algorithm_with_options(options, |s| s.metrics().epoch() < stop_at);
+                assert_eq!(result.stop_reason(), StopReason::Cancelled);
+                assert_eq!(result.epochs().last().unwrap().epoch(), stop_at);
+            }
+        }
+    }
+
+    #[test]
+    fn profiling_and_history_options_preserve_seeded_results() {
+        let config = GaConfig::new(18, 40, 12, 42).with_local_search_rate(0.05);
+        let mut reference = build_genetic_algorithm(config).unwrap();
+        let full = reference.run_algorithm();
+        let mut observed = build_genetic_algorithm(config).unwrap();
+        let mut epochs = Vec::new();
+        let compact = observed.run_algorithm_with_options(
+            super::RunOptions {
+                profile: true,
+                collect_history: false,
+                ..Default::default()
+            },
+            |s| {
+                epochs.push((s.metrics().epoch(), s.best_conflicts_sum()));
+                true
+            },
+        );
+        assert_eq!(full.stop_reason(), compact.stop_reason());
+        assert_eq!(full.solved_epoch(), compact.solved_epoch());
+        assert_eq!(
+            reference.get_best_chromosome().get_positions(),
+            observed.get_best_chromosome().get_positions()
+        );
+        assert_eq!(
+            epochs,
+            full.epochs()
+                .iter()
+                .map(|e| (e.epoch(), e.best_conflicts_sum()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(compact.epochs().len(), 1);
+        assert_eq!(
+            compact.epochs()[0].epoch(),
+            full.epochs().last().unwrap().epoch()
+        );
+        assert!(full.phase_timings().is_none());
+        let timings = compact.phase_timings().unwrap();
+        assert!(timings.population_metrics_ns > 0);
+        assert!(timings.crossover_ns > 0);
+        assert!(timings.mutation_ns > 0);
+        assert!(timings.local_search_ns > 0);
+    }
 
     fn build_test_algorithm(population: Vec<Chromosome>) -> GeneticAlgorithm {
         let target_population_size = population.len().max(1);
@@ -1648,7 +1974,13 @@ mod tests {
         )
         .expect("valid config should build");
 
-        let run_metrics = genetic_algorithm.run_algorithm();
+        let run_metrics = genetic_algorithm.run_algorithm_with_options(
+            super::RunOptions {
+                allow_unsolvable: true,
+                ..Default::default()
+            },
+            |_| true,
+        );
 
         assert_eq!(run_metrics.solved_epoch(), None);
         assert_eq!(run_metrics.epochs().len(), 3);

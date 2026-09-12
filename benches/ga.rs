@@ -67,5 +67,46 @@ fn benchmark_epoch_loop(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, benchmark_conflict_count, benchmark_epoch_loop);
+#[cfg(feature = "bench-internals")]
+fn benchmark_phases(c: &mut Criterion) {
+    use ga::benchmarking;
+    let mut group = c.benchmark_group("phases");
+    group.sample_size(10);
+    type Phase = fn(&mut ga::GeneticAlgorithm) -> usize;
+    let phases: [(&str, Phase); 4] = [
+        ("crossover", benchmarking::crossover),
+        ("mutation", benchmarking::mutation),
+        ("local_search", benchmarking::local_search),
+        ("diversity_metrics", benchmarking::diversity_metrics),
+    ];
+    for population in [1_000, 40_000] {
+        for (name, phase) in phases {
+            group.bench_function(BenchmarkId::new(name, population), |b| {
+                b.iter_batched_ref(
+                    || {
+                        let mut algorithm = ga::build_genetic_algorithm(
+                            ga::GaConfig::new(18, population, 1, 42).with_local_search_rate(0.05),
+                        )
+                        .unwrap();
+                        benchmarking::prepare(&mut algorithm);
+                        algorithm
+                    },
+                    |algorithm| black_box(phase(algorithm)),
+                    BatchSize::LargeInput,
+                );
+            });
+        }
+    }
+    group.finish();
+}
+
+#[cfg(not(feature = "bench-internals"))]
+fn benchmark_phases(_: &mut Criterion) {}
+
+criterion_group!(
+    benches,
+    benchmark_conflict_count,
+    benchmark_epoch_loop,
+    benchmark_phases
+);
 criterion_main!(benches);

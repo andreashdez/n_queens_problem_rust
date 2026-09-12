@@ -2,7 +2,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver},
+        mpsc::{self, Receiver, TryRecvError, TrySendError},
     },
     thread,
     time::Duration,
@@ -42,6 +42,7 @@ struct GuiConfig {
     tournament_size: u32,
     local_search_rate: f32,
     local_search_attempts: u32,
+    allow_unsolvable: bool,
 }
 
 impl Default for GuiConfig {
@@ -59,6 +60,7 @@ impl Default for GuiConfig {
             tournament_size: ga::DEFAULT_TOURNAMENT_SIZE as u32,
             local_search_rate: ga::DEFAULT_LOCAL_SEARCH_RATE,
             local_search_attempts: ga::DEFAULT_LOCAL_SEARCH_ATTEMPTS as u32,
+            allow_unsolvable: false,
         }
     }
 }
@@ -94,6 +96,17 @@ impl GuiConfig {
         .validated()
     }
 
+    fn use_measured_values(&mut self) {
+        *self = Self {
+            population_size: 4_000,
+            max_epochs: 200,
+            selection_strategy: SelectionStrategy::Tournament,
+            local_search_rate: 0.05,
+            seed: self.seed,
+            ..Self::default()
+        };
+    }
+
     fn use_fast_demo_values(&mut self) {
         self.board_size = 8;
         self.population_size = 256;
@@ -125,7 +138,6 @@ struct RunResult {
     best_conflicts: Vec<u32>,
     best_conflicts_sum: u32,
     population_size: usize,
-    cancelled: bool,
 }
 
 struct ChartSeries {
@@ -134,11 +146,53 @@ struct ChartSeries {
     values: Vec<(u32, f32)>,
 }
 
+const MAX_CHART_POINTS: usize = 1024;
+
+struct MetricHistory {
+    points: Vec<ga::EpochMetrics>,
+    stride: u64,
+}
+
+impl Default for MetricHistory {
+    fn default() -> Self {
+        Self {
+            points: Vec::new(),
+            stride: 1,
+        }
+    }
+}
+
+impl MetricHistory {
+    fn push(&mut self, metrics: ga::EpochMetrics, force: bool) {
+        if self
+            .points
+            .last()
+            .is_some_and(|last| last.epoch() == metrics.epoch())
+        {
+            return;
+        }
+        if !force && !u64::from(metrics.epoch()).is_multiple_of(self.stride) {
+            return;
+        }
+        if self.points.len() >= MAX_CHART_POINTS {
+            self.stride *= 2;
+            // Decimate by index as transport can skip epochs; always release half the space.
+            let mut index = 0;
+            self.points.retain(|_| {
+                let keep = index % 2 == 0;
+                index += 1;
+                keep
+            });
+        }
+        self.points.push(metrics);
+    }
+}
+
 struct NQueensApp {
     config: GuiConfig,
     running: Option<RunningRun>,
     cancel_requested: bool,
-    snapshots: Vec<EpochSnapshot>,
+    history: MetricHistory,
     latest_snapshot: Option<EpochSnapshot>,
     result: Option<RunResult>,
     error: Option<String>,
@@ -152,7 +206,7 @@ impl NQueensApp {
             config: GuiConfig::default(),
             running: None,
             cancel_requested: false,
-            snapshots: Vec::new(),
+            history: MetricHistory::default(),
             latest_snapshot: None,
             result: None,
             error: None,
@@ -165,7 +219,7 @@ impl NQueensApp {
         }
 
         self.config.normalize();
-        self.snapshots.clear();
+        self.history = MetricHistory::default();
         self.latest_snapshot = None;
         self.result = None;
         self.error = None;
@@ -184,26 +238,35 @@ impl NQueensApp {
     }
 
     fn drain_worker_messages(&mut self, ctx: &egui::Context) {
-        let messages = self
-            .running
-            .as_ref()
-            .map(|running| running.receiver.try_iter().collect::<Vec<_>>())
-            .unwrap_or_default();
         let mut finished = false;
-
-        for message in messages {
-            match message {
-                WorkerMessage::Snapshot(snapshot) => {
-                    self.latest_snapshot = Some(snapshot.clone());
-                    self.snapshots.push(snapshot);
-                }
-                WorkerMessage::Finished(result) => {
-                    self.result = Some(result);
-                    finished = true;
-                }
-                WorkerMessage::Failed(error) => {
-                    self.error = Some(error);
-                    finished = true;
+        if let Some(running) = &self.running {
+            // At most one pending snapshot and one terminal message per frame.
+            for _ in 0..2 {
+                match running.receiver.try_recv() {
+                    Ok(WorkerMessage::Snapshot(snapshot)) => {
+                        self.history.push(snapshot.metrics().clone(), false);
+                        self.latest_snapshot = Some(snapshot);
+                    }
+                    Ok(WorkerMessage::Finished(result)) => {
+                        if let Some(metrics) = result.metrics.epochs().last() {
+                            self.history.push(metrics.clone(), true);
+                        }
+                        self.result = Some(result);
+                        finished = true;
+                        break;
+                    }
+                    Ok(WorkerMessage::Failed(error)) => {
+                        self.error = Some(error);
+                        finished = true;
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        self.error =
+                            Some("Solver worker disconnected before reporting a result".into());
+                        finished = true;
+                        break;
+                    }
                 }
             }
         }
@@ -218,8 +281,13 @@ impl NQueensApp {
 
     fn draw_controls(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let is_running = self.running.is_some();
-
         ui.heading("Parameters");
+        ui.add_enabled_ui(!is_running, |ui| {
+            ui.checkbox(
+                &mut self.config.allow_unsolvable,
+                "Experiment on unsolvable boards",
+            );
+        });
         ui.add_space(6.0);
 
         egui::Grid::new("parameter_grid")
@@ -345,6 +413,12 @@ impl NQueensApp {
             self.config.use_fast_demo_values();
         }
         if ui
+            .add_enabled(!is_running, egui::Button::new("Measured 18×18 values"))
+            .clicked()
+        {
+            self.config.use_measured_values();
+        }
+        if ui
             .add_enabled(!is_running, egui::Button::new("Reset defaults"))
             .clicked()
         {
@@ -392,7 +466,7 @@ impl NQueensApp {
 
         if let Some(result) = &self.result {
             ui.add_space(6.0);
-            if result.cancelled {
+            if result.metrics.stop_reason() == ga::StopReason::Cancelled {
                 ui.colored_label(Color32::from_rgb(245, 190, 95), "Run cancelled");
             } else if let Some(epoch) = result.metrics.solved_epoch() {
                 ui.colored_label(
@@ -400,7 +474,12 @@ impl NQueensApp {
                     format!("Solved at epoch {epoch}"),
                 );
             } else {
-                ui.colored_label(Color32::from_rgb(245, 190, 95), "No solution found");
+                let message = if result.metrics.stop_reason() == ga::StopReason::Unsolvable {
+                    "This board size has no solution"
+                } else {
+                    "Epoch limit reached"
+                };
+                ui.colored_label(Color32::from_rgb(245, 190, 95), message);
             }
             ui.label(format!("Final population: {}", result.population_size));
             ui.label(format!(
@@ -427,7 +506,7 @@ impl NQueensApp {
         });
 
         ui.separator();
-        draw_charts(ui, &self.snapshots);
+        draw_charts(ui, &self.history.points);
     }
 
     fn current_board(&self) -> Option<(&[u16], &[u32], u32)> {
@@ -471,7 +550,7 @@ impl NQueensApp {
         }
 
         if let Some(result) = &self.result {
-            if result.cancelled {
+            if result.metrics.stop_reason() == ga::StopReason::Cancelled {
                 return format!(
                     "Cancelled with {} best conflicts",
                     result.best_conflicts_sum
@@ -480,7 +559,13 @@ impl NQueensApp {
             if let Some(epoch) = result.metrics.solved_epoch() {
                 return format!("Solved at epoch {epoch}");
             }
-            return format!("Finished with {} best conflicts", result.best_conflicts_sum);
+            if result.metrics.stop_reason() == ga::StopReason::Unsolvable {
+                return "This board size has no solution".to_owned();
+            }
+            return format!(
+                "Epoch limit reached with {} best conflicts",
+                result.best_conflicts_sum
+            );
         }
 
         "Ready".to_owned()
@@ -543,7 +628,7 @@ impl eframe::App for NQueensApp {
 }
 
 fn spawn_solver(config: GuiConfig) -> (Receiver<WorkerMessage>, Arc<AtomicBool>) {
-    let (sender, receiver) = mpsc::channel();
+    let (sender, receiver) = mpsc::sync_channel(1);
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_worker = Arc::clone(&cancel);
 
@@ -564,16 +649,25 @@ fn spawn_solver(config: GuiConfig) -> (Receiver<WorkerMessage>, Arc<AtomicBool>)
             }
         };
         let progress_sender = sender.clone();
-        let run_metrics = algorithm.run_algorithm_with_progress(|snapshot| {
-            if cancel_worker.load(Ordering::Relaxed) {
-                return false;
-            }
+        let run_metrics = algorithm.run_algorithm_with_options(
+            ga::RunOptions {
+                allow_unsolvable: config.allow_unsolvable,
+                collect_history: false,
+                profile: false,
+            },
+            |snapshot| {
+                if cancel_worker.load(Ordering::Relaxed) {
+                    return false;
+                }
 
-            progress_sender
-                .send(WorkerMessage::Snapshot(snapshot.clone()))
-                .is_ok()
-                && !cancel_worker.load(Ordering::Relaxed)
-        });
+                let connected =
+                    match progress_sender.try_send(WorkerMessage::Snapshot(snapshot.clone())) {
+                        Ok(()) | Err(TrySendError::Full(_)) => true,
+                        Err(TrySendError::Disconnected(_)) => false,
+                    };
+                connected && !cancel_worker.load(Ordering::Relaxed)
+            },
+        );
 
         let best_chromosome = algorithm.get_best_chromosome();
         let result = RunResult {
@@ -582,7 +676,6 @@ fn spawn_solver(config: GuiConfig) -> (Receiver<WorkerMessage>, Arc<AtomicBool>)
             best_conflicts: best_chromosome.get_conflicts().to_vec(),
             best_conflicts_sum: best_chromosome.get_conflicts_sum(),
             population_size: algorithm.get_population_size(),
-            cancelled: cancel_worker.load(Ordering::Relaxed),
         };
 
         let _ = sender.send(WorkerMessage::Finished(result));
@@ -722,7 +815,7 @@ fn queen_color(conflicts: u32) -> Color32 {
     }
 }
 
-fn draw_charts(ui: &mut egui::Ui, snapshots: &[EpochSnapshot]) {
+fn draw_charts(ui: &mut egui::Ui, snapshots: &[ga::EpochMetrics]) {
     if snapshots.is_empty() {
         ui.label("Charts appear after the first epoch snapshot.");
         return;
@@ -734,12 +827,7 @@ fn draw_charts(ui: &mut egui::Ui, snapshots: &[EpochSnapshot]) {
             color: Color32::from_rgb(95, 220, 140),
             values: snapshots
                 .iter()
-                .map(|snapshot| {
-                    (
-                        snapshot.metrics().epoch(),
-                        snapshot.metrics().best_conflicts_sum() as f32,
-                    )
-                })
+                .map(|snapshot| (snapshot.epoch(), snapshot.best_conflicts_sum() as f32))
                 .collect(),
         },
         ChartSeries {
@@ -747,12 +835,7 @@ fn draw_charts(ui: &mut egui::Ui, snapshots: &[EpochSnapshot]) {
             color: Color32::from_rgb(110, 190, 255),
             values: snapshots
                 .iter()
-                .map(|snapshot| {
-                    (
-                        snapshot.metrics().epoch(),
-                        snapshot.metrics().average_conflicts_sum(),
-                    )
-                })
+                .map(|snapshot| (snapshot.epoch(), snapshot.average_conflicts_sum()))
                 .collect(),
         },
     ];
@@ -764,12 +847,7 @@ fn draw_charts(ui: &mut egui::Ui, snapshots: &[EpochSnapshot]) {
             color: Color32::from_rgb(245, 210, 95),
             values: snapshots
                 .iter()
-                .map(|snapshot| {
-                    (
-                        snapshot.metrics().epoch(),
-                        snapshot.metrics().diversity_ratio(),
-                    )
-                })
+                .map(|snapshot| (snapshot.epoch(), snapshot.diversity_ratio()))
                 .collect(),
         },
         ChartSeries {
@@ -777,12 +855,7 @@ fn draw_charts(ui: &mut egui::Ui, snapshots: &[EpochSnapshot]) {
             color: Color32::from_rgb(245, 120, 170),
             values: snapshots
                 .iter()
-                .map(|snapshot| {
-                    (
-                        snapshot.metrics().epoch(),
-                        snapshot.metrics().mutation_rate(),
-                    )
-                })
+                .map(|snapshot| (snapshot.epoch(), snapshot.mutation_rate()))
                 .collect(),
         },
         ChartSeries {
@@ -790,7 +863,7 @@ fn draw_charts(ui: &mut egui::Ui, snapshots: &[EpochSnapshot]) {
             color: Color32::from_rgb(160, 135, 255),
             values: snapshots
                 .iter()
-                .map(|snapshot| (snapshot.metrics().epoch(), snapshot.metrics().elite_ratio()))
+                .map(|snapshot| (snapshot.epoch(), snapshot.elite_ratio()))
                 .collect(),
         },
     ];
@@ -893,5 +966,102 @@ fn draw_chart_series(
         let start = to_pos(pair[0].0, pair[0].1);
         let end = to_pos(pair[1].0, pair[1].1);
         painter.line_segment([start, end], stroke);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chart_history_stays_bounded_and_keeps_endpoints() {
+        let mut history = MetricHistory::default();
+        let mut algorithm = ga::build_genetic_algorithm(GaConfig::new(3, 1, 5_000, 42)).unwrap();
+        let metrics = algorithm.run_algorithm_with_options(
+            ga::RunOptions {
+                allow_unsolvable: true,
+                collect_history: false,
+                profile: false,
+            },
+            |snapshot| {
+                history.push(snapshot.metrics().clone(), false);
+                assert!(history.points.len() <= MAX_CHART_POINTS);
+                true
+            },
+        );
+        history.push(metrics.epochs().last().unwrap().clone(), true);
+        assert_eq!(history.points.first().unwrap().epoch(), 0);
+        assert_eq!(history.points.last().unwrap().epoch(), 5_000);
+        assert!(history.points.len() <= MAX_CHART_POINTS);
+        assert!(
+            history
+                .points
+                .windows(2)
+                .all(|pair| pair[0].epoch() < pair[1].epoch())
+        );
+    }
+
+    #[test]
+    fn disconnected_worker_clears_running_state() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        drop(sender);
+        let mut app = NQueensApp {
+            config: GuiConfig::default(),
+            running: Some(RunningRun {
+                receiver,
+                cancel: Arc::new(AtomicBool::new(false)),
+            }),
+            cancel_requested: false,
+            history: MetricHistory::default(),
+            latest_snapshot: None,
+            result: None,
+            error: None,
+        };
+        app.drain_worker_messages(&egui::Context::default());
+        assert!(app.running.is_none());
+        assert!(app.error.as_ref().unwrap().contains("disconnected"));
+    }
+
+    #[test]
+    fn full_progress_queue_preserves_terminal_result() {
+        let (receiver, _) = spawn_solver(GuiConfig {
+            board_size: 1,
+            population_size: 1,
+            ..Default::default()
+        });
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(5)).unwrap(),
+            WorkerMessage::Snapshot(_)
+        ));
+        match receiver.recv_timeout(Duration::from_secs(5)).unwrap() {
+            WorkerMessage::Finished(result) => {
+                assert_eq!(result.metrics.stop_reason(), ga::StopReason::Solved);
+                assert_eq!(result.metrics.epochs().len(), 1);
+                assert_eq!(result.best_conflicts_sum, 0);
+            }
+            _ => panic!("expected terminal result"),
+        }
+    }
+
+    #[test]
+    fn cancelled_worker_reports_authoritative_stop_reason() {
+        let (receiver, cancel) = spawn_solver(GuiConfig {
+            board_size: 3,
+            population_size: 8,
+            max_epochs: 100_000,
+            allow_unsolvable: true,
+            ..Default::default()
+        });
+        cancel.store(true, Ordering::Relaxed);
+        loop {
+            match receiver.recv_timeout(Duration::from_secs(5)).unwrap() {
+                WorkerMessage::Snapshot(_) => {}
+                WorkerMessage::Finished(result) => {
+                    assert_eq!(result.metrics.stop_reason(), ga::StopReason::Cancelled);
+                    break;
+                }
+                WorkerMessage::Failed(error) => panic!("{error}"),
+            }
+        }
     }
 }

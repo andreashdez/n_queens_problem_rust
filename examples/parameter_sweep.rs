@@ -1,4 +1,12 @@
-use std::{error::Error, time::Instant};
+use serde_json::json;
+use std::{
+    error::Error,
+    fs::{self, File},
+    io::{self, Write},
+    path::{Path, PathBuf},
+    process::Command,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 
 use clap::Parser;
 use n_queens_problem::ga::{self, GaConfig};
@@ -125,9 +133,22 @@ struct SweepConfig {
         help = "Local-search swap-attempt counts to test"
     )]
     local_search_attempts: Vec<usize>,
+    #[arg(
+        long,
+        help = "Save metadata, source snapshot, seed results and aggregates to a new directory"
+    )]
+    output_dir: Option<PathBuf>,
+    #[arg(long, help = "Evolve unsolvable sizes 2 and 3 for experiments")]
+    allow_unsolvable: bool,
+    #[arg(long, help = "Record per-phase solver timings in seed results")]
+    profile: bool,
 }
 
 struct SweepRun {
+    seed: u64,
+    stop_reason: ga::StopReason,
+    elapsed_ns: u128,
+    phase_timings: Option<ga::PhaseTimings>,
     solved_epoch: Option<u32>,
     elapsed_ms: u128,
     best_conflicts_sum: u32,
@@ -219,7 +240,11 @@ fn seed_for_offset(seed_start: u64, seed_offset: usize) -> Result<u64, String> {
         .ok_or_else(|| "seed range overflows u64".to_owned())
 }
 
-fn run_single_seed(case: SweepCase, seed: u64) -> Result<SweepRun, ga::GaConfigError> {
+fn run_single_seed(
+    case: SweepCase,
+    seed: u64,
+    options: ga::RunOptions,
+) -> Result<SweepRun, ga::GaConfigError> {
     let config = GaConfig::new(case.size, case.population, case.epochs, seed)
         .with_mutation_rate(case.mutation_rate)
         .with_elite_ratio(case.elite_ratio)
@@ -233,11 +258,16 @@ fn run_single_seed(case: SweepCase, seed: u64) -> Result<SweepRun, ga::GaConfigE
 
     let started_at = Instant::now();
     let mut algorithm = ga::build_genetic_algorithm(config)?;
-    let metrics = algorithm.run_algorithm();
+    let metrics = algorithm.run_algorithm_with_options(options, |_| true);
+    let elapsed = started_at.elapsed();
 
     Ok(SweepRun {
+        seed,
+        stop_reason: metrics.stop_reason(),
+        elapsed_ns: elapsed.as_nanos(),
+        phase_timings: metrics.phase_timings().cloned(),
         solved_epoch: metrics.solved_epoch(),
-        elapsed_ms: started_at.elapsed().as_millis(),
+        elapsed_ms: elapsed.as_millis(),
         best_conflicts_sum: algorithm.get_best_chromosome().get_conflicts_sum(),
     })
 }
@@ -274,7 +304,7 @@ fn format_optional(value: Option<f64>) -> String {
     value.map(|value| format!("{value:.1}")).unwrap_or_default()
 }
 
-fn print_summary(case: SweepCase, runs: &[SweepRun]) {
+fn summary_row(case: SweepCase, runs: &[SweepRun]) -> String {
     let solved_count = runs.iter().filter(|run| run.solved_epoch.is_some()).count();
     let solve_rate = solved_count as f64 / runs.len() as f64;
     let total_elapsed_ms = runs.iter().map(|run| run.elapsed_ms).sum::<u128>();
@@ -310,17 +340,149 @@ fn print_summary(case: SweepCase, runs: &[SweepRun]) {
     let median_elapsed_ms = format_optional(median_u128(&mut elapsed_values));
     let best_conflicts_median = format_optional(median_u32(&mut best_conflicts));
 
-    println!(
+    format!(
         "{size},{population},{epochs},{mutation_rate:.6},{elite_ratio:.6},{offspring_ratio:.6},{min_diversity_ratio:.6},{selection_strategy},{tournament_size},{local_search_rate:.6},{local_search_attempts},{seed_count},{solved_count},{solve_rate:.3},{median_solved_epoch},{median_elapsed_ms},{total_elapsed_ms},{best_conflicts_median},{best_conflicts_min}",
-    );
+    )
+}
+
+const SUMMARY_HEADER: &str = "size,population,epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,local_search_rate,local_search_attempts,seeds,solved,solve_rate,median_solved_epoch,median_elapsed_ms,total_elapsed_ms,best_conflicts_median,best_conflicts_min";
+
+fn command_output(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program)
+        .args(args)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+struct Artifacts {
+    runs: File,
+    summary: File,
+}
+
+impl Artifacts {
+    fn create(path: &Path, config: &SweepConfig) -> Result<Self, Box<dyn Error>> {
+        // Refuse reuse so experiments never silently overwrite earlier evidence.
+        fs::create_dir(path)?;
+        let absolute_output = path.canonicalize()?;
+        for source_dir in ["src", "examples", "benches", "tests"] {
+            if absolute_output.starts_with(Path::new(env!("CARGO_MANIFEST_DIR")).join(source_dir)) {
+                return Err("output directory must be outside Rust source directories".into());
+            }
+        }
+        let metadata = json!({
+            "schema_version": 1,
+            "started_unix_seconds": SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+            "git_commit": command_output("git", &["rev-parse", "HEAD"]),
+            "git_status": command_output("git", &["status", "--porcelain"]),
+            "rustc": command_output("rustc", &["-Vv"]),
+            "package_version": env!("CARGO_PKG_VERSION"),
+            "debug_assertions": cfg!(debug_assertions),
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+            "system": command_output("uname", &["-a"]),
+            "available_parallelism": std::thread::available_parallelism().ok().map(usize::from),
+            "rayon_threads": rayon::current_num_threads(),
+            "rustflags": std::env::var("RUSTFLAGS").ok(),
+            "args": std::env::args().skip(1).collect::<Vec<_>>(),
+            "seed_start": config.seed_start,
+            "seed_count": config.seed_count,
+            "allow_unsolvable": config.allow_unsolvable,
+            "profile": config.profile,
+            "timing_scope": "elapsed_ns/ms include population construction; phase timings exclude it",
+            "source_snapshot": "source/ contains current workspace Rust sources and lockfile; run via cargo run so they match the binary",
+        });
+        serde_json::to_writer_pretty(File::create(path.join("metadata.json"))?, &metadata)?;
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        for name in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml"] {
+            let dest = path.join("source").join(name);
+            fs::create_dir_all(dest.parent().unwrap())?;
+            fs::copy(root.join(name), dest)?;
+        }
+        for name in ["src", "examples", "benches", "tests"] {
+            copy_rust_sources(&root.join(name), &path.join("source").join(name))?;
+        }
+        if let Some(diff) = command_output(
+            "git",
+            &[
+                "diff",
+                "HEAD",
+                "--",
+                "Cargo.toml",
+                "Cargo.lock",
+                "src",
+                "examples",
+                "benches",
+                "tests",
+            ],
+        ) {
+            fs::write(path.join("source.patch"), diff)?;
+        }
+        let runs = File::create(path.join("runs.jsonl"))?;
+        let mut summary = File::create(path.join("summary.csv"))?;
+        writeln!(summary, "{SUMMARY_HEADER}")?;
+        Ok(Self { runs, summary })
+    }
+
+    fn record(
+        &mut self,
+        case: SweepCase,
+        run: &SweepRun,
+        options: ga::RunOptions,
+    ) -> io::Result<()> {
+        let row = json!({
+            "config": {
+                "size": case.size, "population": case.population, "epochs": case.epochs,
+                "mutation_rate": case.mutation_rate, "elite_ratio": case.elite_ratio,
+                "offspring_ratio": case.offspring_ratio, "min_diversity_ratio": case.min_diversity_ratio,
+                "selection_strategy": case.selection_strategy.to_string(), "tournament_size": case.tournament_size,
+                "local_search_rate": case.local_search_rate, "local_search_attempts": case.local_search_attempts,
+                "allow_unsolvable": options.allow_unsolvable,
+            },
+            "seed": run.seed, "stop_reason": run.stop_reason.to_string(),
+            "solved_epoch": run.solved_epoch, "best_conflicts_sum": run.best_conflicts_sum,
+            "elapsed_ns": run.elapsed_ns, "elapsed_ms": run.elapsed_ms,
+            "phase_timings": run.phase_timings.as_ref().map(ga::PhaseTimings::to_json),
+        });
+        serde_json::to_writer(&mut self.runs, &row)?;
+        writeln!(self.runs)?;
+        self.runs.flush()
+    }
+}
+
+fn copy_rust_sources(source: &Path, dest: &Path) -> io::Result<()> {
+    fs::create_dir_all(dest)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            copy_rust_sources(&entry.path(), &dest.join(entry.file_name()))?;
+        } else if kind.is_file() && entry.path().extension().is_some_and(|ext| ext == "rs") {
+            fs::copy(entry.path(), dest.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let sweep_config = SweepConfig::parse();
 
-    println!(
-        "size,population,epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,local_search_rate,local_search_attempts,seeds,solved,solve_rate,median_solved_epoch,median_elapsed_ms,total_elapsed_ms,best_conflicts_median,best_conflicts_min"
-    );
+    seed_for_offset(sweep_config.seed_start, sweep_config.seed_count - 1)?;
+    let options = ga::RunOptions {
+        allow_unsolvable: sweep_config.allow_unsolvable,
+        collect_history: false,
+        profile: sweep_config.profile,
+    };
+    let mut artifacts = sweep_config
+        .output_dir
+        .as_ref()
+        .map(|path| Artifacts::create(path, &sweep_config))
+        .transpose()?;
+    println!("{SUMMARY_HEADER}");
 
     for &size in &sweep_config.sizes {
         for &population in &sweep_config.populations {
@@ -355,11 +517,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                                                         sweep_config.seed_start,
                                                         seed_offset,
                                                     )?;
-                                                    let run = run_single_seed(case, seed)?;
+                                                    let run = run_single_seed(case, seed, options)?;
+                                                    if let Some(artifacts) = &mut artifacts {
+                                                        artifacts.record(case, &run, options)?;
+                                                    }
                                                     runs.push(run);
                                                 }
 
-                                                print_summary(case, &runs);
+                                                let row = summary_row(case, &runs);
+                                                println!("{row}");
+                                                if let Some(artifacts) = &mut artifacts {
+                                                    writeln!(artifacts.summary, "{row}")?;
+                                                    artifacts.summary.flush()?;
+                                                }
                                             }
                                         }
                                     }
@@ -373,4 +543,84 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seed_range_and_medians_handle_boundaries() {
+        assert!(seed_for_offset(u64::MAX, 1).is_err());
+        assert_eq!(seed_for_offset(u64::MAX, 0).unwrap(), u64::MAX);
+        assert_eq!(median_u32(&mut []), None);
+        assert_eq!(median_u32(&mut [3, 1, 2]), Some(2.0));
+        assert_eq!(median_u128(&mut [4, 1, 2, 3]), Some(2.5));
+    }
+
+    #[test]
+    fn saved_results_include_config_seed_outcome_environment_and_sources() {
+        let path = std::env::temp_dir().join(format!(
+            "queens-sweep-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let config = SweepConfig::parse_from([
+            "sweep",
+            "--sizes",
+            "3",
+            "--populations",
+            "4",
+            "--epochs",
+            "2",
+            "--seeds",
+            "1",
+        ]);
+        let mut artifacts = Artifacts::create(&path, &config).unwrap();
+        let case = SweepCase {
+            size: 3,
+            population: 4,
+            epochs: 2,
+            mutation_rate: 0.08,
+            elite_ratio: 0.1,
+            offspring_ratio: 0.1,
+            min_diversity_ratio: 0.1,
+            selection_strategy: ga::SelectionStrategy::Roulette,
+            tournament_size: 3,
+            local_search_rate: 0.0,
+            local_search_attempts: 8,
+        };
+        let options = ga::RunOptions {
+            profile: true,
+            ..Default::default()
+        };
+        let run = run_single_seed(case, 42, options).unwrap();
+        artifacts.record(case, &run, options).unwrap();
+        writeln!(artifacts.summary, "{}", summary_row(case, &[run])).unwrap();
+        let row: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(path.join("runs.jsonl")).unwrap()).unwrap();
+        assert_eq!(row["seed"], 42);
+        assert_eq!(row["config"]["size"], 3);
+        assert_eq!(row["stop_reason"], "unsolvable");
+        assert!(row["phase_timings"].is_object());
+        let metadata: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(path.join("metadata.json")).unwrap()).unwrap();
+        assert!(metadata["rayon_threads"].as_u64().unwrap() > 0);
+        assert_eq!(metadata["os"], std::env::consts::OS);
+        assert!(path.join("source/src/ga.rs").exists());
+        assert!(path.join("source/Cargo.lock").exists());
+        assert_eq!(
+            fs::read_to_string(path.join("summary.csv"))
+                .unwrap()
+                .lines()
+                .count(),
+            2
+        );
+        assert!(Artifacts::create(&path, &config).is_err());
+        drop(artifacts);
+        fs::remove_dir_all(path).unwrap();
+    }
 }

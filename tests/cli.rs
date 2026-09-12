@@ -274,6 +274,7 @@ fn metrics_csv_contains_run_configuration_and_epochs() {
     let metrics_path_string = metrics_path.display().to_string();
 
     let output = run_success(&[
+        "--allow-unsolvable",
         "--size",
         "4",
         "--population",
@@ -305,13 +306,13 @@ fn metrics_csv_contains_run_configuration_and_epochs() {
     let lines = csv.lines().collect::<Vec<_>>();
     assert_eq!(
         lines[0],
-        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,local_search_rate,local_search_attempts,epoch,best_conflicts_sum,population_size,elapsed_ms,average_conflicts_sum,unique_chromosomes,diversity_ratio,epoch_mutation_rate,epoch_elite_ratio,offspring_count,local_search_improvements,stagnation_epochs,diversity_replacements"
+        "seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,local_search_rate,local_search_attempts,epoch,best_conflicts_sum,population_size,elapsed_ms,average_conflicts_sum,unique_chromosomes,diversity_ratio,epoch_mutation_rate,epoch_elite_ratio,offspring_count,local_search_improvements,stagnation_epochs,diversity_replacements,stop_reason,allow_unsolvable"
     );
     assert_eq!(lines.len(), 4);
     assert!(lines[1].starts_with("42,4,8,2,0,0.25,0,0.1,roulette,3,0,8,0,"));
     assert!(lines[2].starts_with("42,4,8,2,0,0.25,0,0.1,roulette,3,0,8,1,"));
     assert!(lines[3].starts_with("42,4,8,2,0,0.25,0,0.1,roulette,3,0,8,2,"));
-    assert_eq!(lines[1].split(',').count(), 25);
+    assert_eq!(lines[1].split(',').count(), 27);
 }
 
 #[test]
@@ -349,8 +350,45 @@ fn unsolvable_board_sizes_do_not_report_solution() {
             "n={size} should not have a zero-conflict best chromosome\n{stdout}"
         );
         assert!(
-            stdout.contains("no solution found"),
-            "n={size} should log that no solution was found\n{stdout}"
+            stdout.contains("Stop reason: unsolvable"),
+            "n={size} should report the unsolvable outcome\n{stdout}"
+        );
+    }
+}
+
+#[test]
+fn json_reports_stop_reason_and_opt_in_profiling() {
+    for size in ["2", "3"] {
+        let output = run_success(&[
+            "--size",
+            size,
+            "--population",
+            "4",
+            "--epochs",
+            "2",
+            "--json",
+        ]);
+        let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(summary["stop_reason"], "unsolvable");
+        assert!(summary["phase_timings"].is_null());
+        let output = run_success(&[
+            "--size",
+            size,
+            "--population",
+            "4",
+            "--epochs",
+            "2",
+            "--allow-unsolvable",
+            "--profile",
+            "--json",
+        ]);
+        let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(summary["stop_reason"], "epoch_limit");
+        assert!(
+            summary["phase_timings"]["population_metrics_ns"]
+                .as_u64()
+                .unwrap()
+                > 0
         );
     }
 }

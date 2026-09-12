@@ -31,7 +31,7 @@ Run the native desktop GUI:
 cargo run --release --features gui --bin n_queens_gui
 ```
 
-The GUI exposes the solver parameters, runs the genetic algorithm on a background thread, supports cancellation, renders the best board, and charts conflict/diversity metrics as epochs complete.
+The GUI exposes the solver parameters, runs the genetic algorithm on a background thread, supports cancellation, renders the best board, and charts conflict/diversity metrics as epochs complete. Its progress queue holds at most one snapshot, and chart history retains at most 1,024 compact metric points. Intermediate updates may be skipped; the final result is always delivered. Closing the window requests cancellation, and unexpected worker disconnection is shown as an error.
 
 ## CLI options
 
@@ -49,6 +49,8 @@ The GUI exposes the solver parameters, runs the genetic algorithm on a backgroun
 - `--local-search-attempts <count>`: random improving swaps attempted per selected chromosome. Default: `8`.
 - `--no-board`: skip board rendering output.
 - `--metrics-csv <path>`: write per-epoch run metrics to a CSV file (includes best/average conflicts, unique chromosomes, adaptive rates, offspring count, local-search improvements, stagnation, and elapsed ms).
+- `--allow-unsolvable`: evolve sizes 2 and 3 for experiments; normally these stop after epoch zero with `unsolvable`.
+- `--profile`: include cumulative phase timings in the text or JSON summary.
 - `--json`: print a machine-readable JSON summary. This suppresses logs and board rendering so stdout remains valid JSON.
 - `--log-level <level>`: log level (`off`, `error`, `warn`, `info`, `debug`, or `trace`). Default: `info`.
 - `--quiet`: suppress log output.
@@ -78,9 +80,66 @@ Run multiple seeds per configuration and compare solve rate, median solved epoch
 cargo run --release --example parameter_sweep -- --sizes 18 --populations 40000 --epochs 5000 --seeds 20 --mutation-rates 0.06,0.08 --elite-ratios 0.05,0.10 --offspring-ratios 0.05,0.10 --min-diversity-ratios 0.05,0.10 --selection-strategies roulette,tournament --tournament-sizes 3,5 --local-search-rates 0,0.05 --local-search-attempts 8
 ```
 
-The sweep prints CSV rows with one aggregate result per parameter combination.
+The sweep prints CSV rows with one aggregate result per parameter combination. Add `--output-dir PATH` to save an experiment to a **new** directory:
+
+```bash
+cargo run --release --locked --example parameter_sweep -- --sizes 18 --populations 4000,40000 --epochs 200 --seeds 20 --selection-strategies roulette,tournament --local-search-rates 0,0.05 --output-dir sweep-results
+```
+
+- `runs.jsonl`: one flushed record per completed seed, with full GA configuration, stop reason, solved epoch, remaining conflicts, and elapsed nanoseconds/milliseconds.
+- `summary.csv`: the same aggregates printed to stdout, written after each configuration.
+- `metadata.json`: seed range, command arguments, Git revision/status, compiler, OS/architecture, available CPUs, actual Rayon thread count, build mode, and profiling setting.
+- `source/` and `source.patch`: workspace Rust sources, Cargo manifest/lockfile, toolchain file, and tracked changes at experiment start. Use `cargo run` from the matching source tree so the binary matches this snapshot. Identical seeds alone do not promise identical results across dependency/toolchain changes.
+
+The directory must not already exist and must be outside `src`, `examples`, `benches`, and `tests`. Use `--seed-start` for independent validation seeds and `--profile` to include phase timings in each seed record. Interrupted sweeps retain completed seed records even if the current configuration has no aggregate yet. Runtime aggregates include unsolved runs; median solved epoch includes only solved runs. Elapsed time includes population construction.
+
+## Measured N=18 presets
+
+A release-build comparison on macOS/aarch64 with eight Rayon threads used 200 epochs and independent validation seeds 101–120:
+
+| Preset | Population | Selection | Local-search rate | Solved | Median runtime |
+| --- | ---: | --- | ---: | ---: | ---: |
+| Compact hybrid | 4,000 | Tournament | 0.05 | 20/20 | 41.5 ms |
+| Roulette hybrid | 4,000 | Roulette | 0.05 | 20/20 | 69.0 ms |
+| Pure GA | 40,000 | Tournament | 0 | 20/20 | 259.5 ms |
+| Current default parameters | 40,000 | Roulette | 0 | 20/20 | 373.0 ms |
+
+All other GA parameters use their defaults. These measurements support trying the compact hybrid for N=18; they do not guarantee success or generalize to other board sizes. The default population and 5,000-epoch budget remain unchanged. The GUI includes a **Measured 18×18 values** button.
+
+```bash
+cargo run --release --locked -- --size 18 --population 4000 --epochs 200 --seed 42 --selection tournament --local-search-rate 0.05
+```
+
+The repository's `benchmarks/README.md` contains the other preset commands, methodology, raw seed results, source archives, and phase measurements.
 
 ## Library configuration
+
+`metrics.stop_reason()` reports `StopReason::Solved`, `EpochLimit`, `Cancelled`, or `Unsolvable`. CLI JSON exposes these as `solved`, `epoch_limit`, `cancelled`, and `unsolvable`; CSV adds `stop_reason` and `allow_unsolvable` columns. Unsolved outcomes are valid run results and retain a successful CLI exit status. Invalid input and I/O failures still return an error status.
+
+For progress, cancellation, bounded metric retention, or profiling:
+
+```rust
+use n_queens_problem::ga::{self, GaConfig, RunOptions};
+
+fn main() -> Result<(), ga::GaConfigError> {
+    let mut solver = ga::build_genetic_algorithm(GaConfig::new(18, 4_000, 200, 42))?;
+    let metrics = solver.run_algorithm_with_options(
+        RunOptions {
+            allow_unsolvable: false,
+            collect_history: false, // only the latest epoch is retained in RunMetrics
+            profile: true,
+        },
+        |snapshot| {
+            println!("epoch {}", snapshot.metrics().epoch());
+            true // return false to cancel after this completed epoch
+        },
+    );
+    println!("{}", metrics.stop_reason());
+    Ok(())
+}
+```
+
+Epoch zero is reported before evolution. Sizes 2 and 3 stop there unless `allow_unsolvable` is true. A discovered solution takes precedence over a callback cancellation request. The existing `run_algorithm()` and `run_algorithm_with_progress()` retain complete history by default. Both parent selection strategies choose exclusively from the population at the start of mating; children first become eligible in the following epoch. This changes tournament trajectories compared with earlier releases.
 
 Use `GaConfig::validated()` or `GaConfig::try_new()` to check configuration before building. `ga::build_genetic_algorithm()` also validates its input and returns an error for invalid public configuration values.
 
@@ -90,7 +149,9 @@ Use `GaConfig::validated()` or `GaConfig::try_new()` to check configuration befo
 cargo fmt --check
 cargo clippy --all-targets --all-features
 cargo test
+cargo test --all-features --examples
 cargo bench --bench ga
+cargo bench --bench ga --features bench-internals -- phases
 ```
 
 ## Example board output (8x8)
@@ -114,3 +175,14 @@ cargo bench --bench ga
 ║    │    │    │ 00 │    │    │    │    ║
 ╚════╧════╧════╧════╧════╧════╧════╧════╝
 ```
+
+## Profiling
+
+```bash
+cargo run --release --locked -- --size 18 --population 4000 --seed 42 --local-search-rate 0.05 --profile --json
+cargo bench --bench ga --features bench-internals -- phases
+```
+
+Profiling is opt-in and does not change RNG consumption. `phase_timings` is `null` when disabled. Timings are cumulative wall-clock nanoseconds for crossover (including parent selection), mutation, local search, survivor selection, fitness, population metrics (including the uniqueness HashSet), diversity refresh, and restarts. These phases do not overlap. Solver timing excludes population construction, and phase totals exclude bookkeeping, snapshot creation, and callbacks.
+
+The `phases` Criterion group measures crossover, mutation, local search, and population/diversity metrics independently at populations of 1,000 and 40,000. Each sample starts with a fresh seeded population; construction and initial fitness calculation are outside the measured section. Local search uses rate 0.05 with eight attempts. `bench-internals` exposes unstable benchmark hooks and is unnecessary for normal builds.
