@@ -1,0 +1,26 @@
+<!-- Preserve bookmarks to sections of the former single-page documentation. -->
+<script>
+  const sections: Record<string, string> = {
+    '#quickstart': 'getting-started/',
+    '#gui': 'gui/',
+    '#cli-options': 'cli/#cli-options',
+    '#tuning-guidance': 'tuning/#tuning-guidance',
+    '#parameter-sweeps': 'tuning/#parameter-sweeps',
+    '#measured-n18-presets': 'benchmarks/#measured-n18-presets',
+    '#library-configuration': 'library/',
+    '#development-checks': 'development/#development-checks',
+    '#example-board-output-8x8': 'getting-started/#example-board-output-8x8',
+    '#profiling': 'benchmarks/#profiling',
+  };
+
+  function followLegacyBookmark() {
+    const destination = sections[window.location.hash];
+    if (destination) {
+      const base = new URL(import.meta.env.BASE_URL, window.location.origin);
+      window.location.replace(new URL(destination, base).href);
+    }
+  }
+
+  followLegacyBookmark();
+  window.addEventListener('hashchange', followLegacyBookmark);
+</script>

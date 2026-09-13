@@ -1,0 +1,39 @@
+/* Keep Starlight's responsive layout, focus styles, and light/dark themes. */
+:root {
+  --sl-color-accent-low: #123a39;
+  --sl-color-accent: #24877f;
+  --sl-color-accent-high: #a9e5d4;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #def5ec;
+  --sl-color-accent: #147267;
+  --sl-color-accent-high: #144c43;
+}
+
+.project-notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1.5rem;
+  margin-block: 0 2.5rem;
+  color: var(--sl-color-gray-2);
+  font-size: var(--sl-text-sm);
+}
+
+.project-notes span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.project-notes span::before {
+  content: '';
+  width: 0.45rem;
+  height: 0.45rem;
+  background: var(--sl-color-text-accent);
+  border-radius: 2px;
+}
+
+.hero h1 {
+  letter-spacing: -0.035em;
+}

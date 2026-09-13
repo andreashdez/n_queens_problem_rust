@@ -1,0 +1,50 @@
+---
+title: N-Queens in Rust
+description: Explore the N-Queens problem with a Rust genetic solver. Run the desktop GUI, automate experiments, and understand the search.
+template: splash
+hero:
+  title: A classic puzzle.<br />An evolving solution.
+  tagline: Place N queens without a single conflict. Watch a genetic algorithm search, explore its decisions, and build reproducible experiments in Rust.
+  image:
+    file: ../../assets/queens-board.svg
+    alt: An eight-by-eight board with eight queens placed so that none attack each other.
+  actions:
+    - text: Get started
+      link: ./getting-started/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/andreashdez/n_queens_problem_rust
+      variant: secondary
+      icon: github
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+import LegacyDocsLinks from '../../components/LegacyDocsLinks.astro';
+
+<LegacyDocsLinks />
+
+<div className="project-notes" aria-label="Project features">
+  <span>Native desktop GUI</span>
+  <span>Seeded experiments</span>
+  <span>Rust library + CLI</span>
+</div>
+
+## Choose your starting point
+
+<CardGrid>
+  <LinkCard title="Run the GUI" href="./gui/" description="Watch convergence, inspect attacking queens, and compare runs side by side." />
+  <LinkCard title="Use the CLI" href="./cli/" description="Choose a seed, configure a run, and export metrics for your experiments." />
+  <LinkCard title="Understand the algorithm" href="./algorithm/" description="Follow a board through selection, crossover, mutation, and survival." />
+  <LinkCard title="Find better settings" href="./tuning/" description="Balance exploration and local search, then test your changes across seeds." />
+</CardGrid>
+
+## From your first board to your next experiment
+
+Start with a small 8×8 board. Then explore a larger search, compare configurations, or use the solver in your own Rust code.
+
+<CardGrid>
+  <LinkCard title="Benchmarks and profiling" href="./benchmarks/" description="Compare measured N=18 presets and see where the solver spends its time." />
+  <LinkCard title="Build with the library" href="./library/" description="Receive epoch updates, request cancellation, and inspect run outcomes." />
+</CardGrid>
+
+New to the project? [Build and run your first board](./getting-started/). Contributing? [See the development checks](./development/).

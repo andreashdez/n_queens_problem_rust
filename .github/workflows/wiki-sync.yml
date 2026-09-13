@@ -4,7 +4,8 @@ on:
   push:
     branches: ["main"]
     paths:
-      - "src/content/docs/index.md"
+      - "src/content/docs/**"
+      - "scripts/wiki-home.py"
       - ".github/workflows/wiki-sync.yml"
   workflow_dispatch:
 
@@ -13,13 +14,13 @@ permissions:
 
 jobs:
   sync-wiki:
-    name: Publish docs page to Wiki Home
+    name: Publish documentation links to Wiki Home
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Sync docs index to wiki Home
+      - name: Sync documentation links to Wiki Home
         run: |
           set -euo pipefail
 
@@ -33,18 +34,7 @@ jobs:
 
           git clone "$WIKI_URL" wiki
 
-          python - <<'PY'
-          from pathlib import Path
-
-          source = Path("src/content/docs/index.md").read_text(encoding="utf-8")
-          if source.startswith("---\n"):
-              end = source.find("\n---\n", 4)
-              if end != -1:
-                  source = source[end + 5 :].lstrip("\n")
-
-          destination = Path("wiki/Home.md")
-          destination.write_text(source.rstrip() + "\n", encoding="utf-8")
-          PY
+          python scripts/wiki-home.py wiki/Home.md
 
           cd wiki
           git config user.name "github-actions[bot]"
@@ -63,5 +53,5 @@ jobs:
             exit 0
           fi
 
-          git commit -m "docs: sync wiki home from astro docs index"
+          git commit -m "docs: sync wiki links to Pages guides"
           git push origin "HEAD:${WIKI_BRANCH}"

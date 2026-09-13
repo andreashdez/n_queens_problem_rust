@@ -36,7 +36,44 @@ export default defineConfig({
   base,
   integrations: [
     starlight({
-      title: "N-Queens Problem",
+      title: "N-Queens in Rust",
+      customCss: ["./src/styles/docs.css"],
+      social: [
+        {
+          icon: "github",
+          label: "GitHub repository",
+          href: "https://github.com/andreashdez/n_queens_problem_rust",
+        },
+      ],
+      editLink: {
+        baseUrl: "https://github.com/andreashdez/n_queens_problem_rust/edit/main/",
+      },
+      sidebar: [
+        { label: "Overview", slug: "" },
+        {
+          label: "Start here",
+          items: [
+            { label: "Getting started", slug: "getting-started" },
+            { label: "GUI guide", slug: "gui" },
+            { label: "CLI reference", slug: "cli" },
+          ],
+        },
+        {
+          label: "Understand and experiment",
+          items: [
+            { label: "How the algorithm works", slug: "algorithm" },
+            { label: "Tuning the solver", slug: "tuning" },
+            { label: "Benchmarks and profiling", slug: "benchmarks" },
+          ],
+        },
+        {
+          label: "Build and contribute",
+          items: [
+            { label: "Library usage", slug: "library" },
+            { label: "Development", slug: "development" },
+          ],
+        },
+      ],
     }),
   ],
 });
