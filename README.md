@@ -199,7 +199,7 @@ npm run build
 
 ```bash
 cargo fmt --check
-cargo clippy --all-targets --all-features
+cargo clippy --all-targets --all-features -- -D clippy::pedantic -D clippy::nursery -D warnings
 cargo test
 cargo test --all-features --examples
 cargo bench --bench ga

@@ -9,11 +9,15 @@ Run the native desktop GUI:
 cargo run --release --features gui --bin n_queens_gui
 ```
 
-The GUI exposes the solver parameters, runs the genetic algorithm on a background thread, supports cancellation, renders the best board, and charts conflict/diversity metrics as epochs complete. Its progress queue holds at most one snapshot, and chart history retains at most 1,024 compact metric points. Intermediate updates may be skipped; the final result is always delivered. Closing the window requests cancellation, and unexpected worker disconnection is shown as an error.
+The native GUI runs the solver in the background while you inspect the best board and follow its progress. Start with **Quick demo · 8×8**. A solved run may finish at epoch zero if its initial population already includes a solution.
 
 ## Configure a run
 
-Choose a preset, board size, and seed at the top of the controls, then click **Run solver**. **Advanced settings** contains population/epoch budgets, mutation, parent selection, diversity, and local-search tuning. Hover over a setting for an explanation. Presets preserve the seed and reset all tuning parameters; manual changes are shown as **Custom settings**.
+1. Choose a preset at the top of the controls.
+2. Set the board size and seed.
+3. Click **Run solver** and watch the status and charts.
+
+**Advanced settings** contains population/epoch budgets, mutation, parent selection, diversity, and local-search tuning. Hover over a setting for an explanation. Presets preserve the seed and reset all tuning parameters; manual changes are shown as **Custom settings**.
 
 ## Inspect the board
 
@@ -27,10 +31,35 @@ Use **+** / **−**, Ctrl/⌘ + scroll, or pinch to zoom into the board, then dr
 
 ## Read the charts
 
+Best conflicts tracks the best board found so far. Average conflicts describes the whole current population, so it may rise after a restart even while the best score stays unchanged. [See an annotated example](../algorithm/#an-example-of-a-stalled-run).
+
 Hover over charts for the nearest retained sample's epoch and values. **R** markers show actual soft-restart epochs. Each completed run keeps at most 1,024 metric samples, including the first and final epoch, plus the latest 1,024 restart locations. Live updates can skip intermediate events; completed history is collected in the worker independently of GUI refreshes.
 
 ## Export a run
 
 **Export metrics** writes the selected run to a new CSV file using an in-app path field. It refuses to overwrite existing files. The CSV includes original settings, the stop reason and runtime, `sample` rows with retained metrics, and `restart` rows preserving retained restart locations even where metric samples were thinned. `downsampled` identifies sampled histories; sample rows include the cumulative restart count. Use CLI `--metrics-csv` when you need every epoch rather than the GUI's bounded history. Saved runs are cleared when the app closes.
+
+### Which export should I use?
+
+| | GUI **Export metrics** | CLI `--metrics-csv` |
+| --- | --- | --- |
+| History | At most 1,024 metric samples | Every epoch, including epoch zero |
+| Restart events | Separate `restart` rows, at most 1,024 locations | No separate restart-event rows |
+| Row format | `sample` and `restart` records | One metric row per epoch |
+| Existing file | Refuses overwrite | Replaces the file |
+| Best use | Inspect or compare saved GUI runs | Analyze the full epoch history |
+
+These are different CSV schemas. Check the column headers before combining files.
+
+## Stop a run
+
+Cancellation takes effect at an epoch callback; it may take time to finish the current work. Closing the window also requests cancellation. Completed and cancelled runs remain in history while the app is open.
+
+<details>
+<summary>How live updates are retained</summary>
+
+The progress queue holds at most one snapshot. Intermediate updates may be skipped to keep memory bounded; the final result is always delivered. Completed history is sampled in the worker independently of screen refreshes. Unexpected worker disconnection appears as an error.
+
+</details>
 
 [Find settings to try →](../tuning/) · [Understand the metrics →](../algorithm/#reading-the-metrics)

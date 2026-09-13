@@ -2,4 +2,6 @@
 /node_modules
 /.astro
 /dist
-/public
+/public/*
+!/public/favicon.svg
+__pycache__/

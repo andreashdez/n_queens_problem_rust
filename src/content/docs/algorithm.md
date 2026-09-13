@@ -13,6 +13,17 @@ The solver's arrays use zero-based positions. GUI coordinates use one-based row 
 
 ## One epoch at a time
 
+<ol class="algorithm-flow" aria-label="One evolution epoch">
+  <li><strong>Select</strong><span>Choose parents</span></li>
+  <li><strong>Crossover</strong><span>Combine permutations</span></li>
+  <li><strong>Mutate</strong><span>Swap queen rows</span></li>
+  <li><strong>Local search</strong><span>Optional improving swaps</span></li>
+  <li><strong>Survive</strong><span>Keep elites and sample</span></li>
+  <li><strong>Measure</strong><span>Refresh diversity and record</span></li>
+</ol>
+
+Repeat until solved, cancelled, or out of epochs. A soft restart can replenish the population before the next epoch's selection.
+
 1. **Select parents.** Roulette selection uses fitness weights; tournament selection chooses the best candidate from a random group. Parents come from the population at the start of mating.
 2. **Create offspring.** Partially mapped crossover (PMX) combines two parent permutations while retaining one queen per row and column.
 3. **Mutate.** Swap row positions in selected non-elite chromosomes to explore other boards.
@@ -41,6 +52,26 @@ A diversity refresh and a soft restart are different events. **R** markers in GU
 | Restart count | Cumulative soft restarts completed so far. |
 
 The GUI retains a bounded sample of history. A line between retained points does not mean every intermediate epoch was kept. [The GUI guide](../gui/#read-the-charts) explains chart sampling and exports.
+
+## An example of a stalled run
+
+The following trace is **illustrative, not a measured benchmark**. The restart epoch varies with the configured budget and stagnation history.
+
+![Illustrative best-conflict curve: 12 at epoch 0, 2 from epochs 20 to 51, then 0 at epoch 65. A dashed R line marks a soft restart at epoch 51.](../../assets/metric-example.svg)
+
+| Epoch | Best conflicts | Average conflicts | Diversity | What to notice |
+| ---: | ---: | ---: | ---: | --- |
+| 0 | 12 | 18 | 90% | The initial population is evaluated. |
+| 20 | 2 | 8 | 45% | A better board has been found. |
+| 50 | 2 | 4 | 18% | Best score is flat; the population has become less diverse. |
+| 51 | 2 | 10 | 80% | **R:** a restart introduces varied boards; the best score is preserved. |
+| 65 | 0 | 6 | 70% | One board solves the problem. The population average need not reach zero. |
+
+A lower diversity ratio alone does not prove that a restart happened. Use the explicit marker. Hover values show retained samples; line segments between samples are not extra measurements.
+
+## A concrete conflict count
+
+On a 4×4 board, permutation `[0, 2, 1, 3]` has two attacking pairs: columns 1 and 4 share a diagonal, as do columns 2 and 3 (using GUI's one-based labels). Every queen has one conflict, so the total conflict sum is **4**, not 2. A solved permutation such as `[1, 3, 0, 2]` has sum **0**.
 
 ## Why use multiple seeds?
 

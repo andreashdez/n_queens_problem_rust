@@ -5,56 +5,90 @@ description: "Command-line flags, defaults, output modes, and stop reasons."
 
 ## Quickstart
 
-```bash
-cargo run --release
-```
-
-Run with explicit parameters:
+[Build the project first](../getting-started/#1-get-the-project), then run commands from its directory. For a small seeded experiment:
 
 ```bash
-cargo run --release -- \
-  --size 18 \
-  --population 40000 \
-  --epochs 5000 \
-  --seed 42 \
-  --mutation-rate 0.08 \
-  --elite-ratio 0.10 \
-  --offspring-ratio 0.10 \
-  --selection tournament \
-  --tournament-size 3 \
-  --local-search-rate 0.05 \
-  --local-search-attempts 8
+cargo run --release --locked -- \
+  --size 8 --population 256 --epochs 250 --seed 42
 ```
 
-Short aliases are also available:
-
-```bash
-cargo run --release -- -n 18 -p 40000 -e 5000 -s 42 -m 0.08 -r 0.10 -o 0.10
-```
+Use `cargo run --release --locked -- --help` to see the CLI's current options. Arguments after the standalone `--` go to the solver rather than Cargo.
 
 ## CLI options
 
-- `-n`, `--size <size>`: board size (number of queens, must be greater than 0). Default: `18`.
-- `-p`, `--population <count>`: initial and target population size. Default: `40000`.
-- `-e`, `--epochs <count>`: maximum GA epochs. Default: `5000`.
-- `-s`, `--seed <u64>`: optional deterministic RNG seed.
-- `-m`, `--mutation-rate <0..1>`: probability of mutating each non-elite chromosome. Default: `0.08`.
-- `-r`, `--elite-ratio <0..1>`: fraction of top chromosomes retained before random survivor sampling. Default: `0.10`.
-- `-o`, `--offspring-ratio <0..1>`: fraction of the target population produced as offspring each epoch. Default: `0.10`.
-- `--min-diversity-ratio <0..1>`: minimum unique-chromosome ratio before non-elites are randomly refreshed. Default: `0.10`.
-- `--selection <roulette|tournament>`: parent selection strategy. Default: `roulette`.
-- `--tournament-size <count>`: candidate count for tournament selection. Default: `3`.
-- `--local-search-rate <0..1>`: fraction of non-elite chromosomes improved with local search each epoch. Default: `0`.
-- `--local-search-attempts <count>`: random improving swaps attempted per selected chromosome. Default: `8`.
-- `--no-board`: skip board rendering output.
-- `--metrics-csv <path>`: write per-epoch run metrics to a CSV file (includes best/average conflicts, unique chromosomes, adaptive rates, offspring count, local-search improvements, stagnation, and elapsed ms).
-- `--allow-unsolvable`: evolve sizes 2 and 3 for experiments; normally these stop after epoch zero with `unsolvable`.
-- `--profile`: include cumulative phase timings in the text or JSON summary.
-- `--json`: print a machine-readable JSON summary. This suppresses logs and board rendering so stdout remains valid JSON.
-- `--log-level <level>`: log level (`off`, `error`, `warn`, `info`, `debug`, or `trace`). Default: `info`.
-- `--quiet`: suppress log output.
+### Board and run budget
 
-If `--seed` is omitted, a random seed is generated and logged.
+| Option | Alias | Default | Purpose |
+| --- | --- | --- | --- |
+| `--size` | `-n` | `18` | Board dimension, from 1 to 65535. |
+| `--population` | `-p` | `40000` | Positive initial and target population size. |
+| `--epochs` | `-e` | `5000` | Positive maximum number of evolution epochs. |
+| `--seed` | `-s` | Generated | Unsigned 64-bit seed for reproducible runs. |
+| `--allow-unsolvable` | — | Off | Evolve sizes 2 and 3 for experiments instead of stopping at epoch zero. |
+
+### Evolution and local search
+
+All rates must be finite numbers in `0..=1`. These are base settings; mutation and elite rates can adapt during stagnation.
+
+| Option | Alias | Default | Purpose |
+| --- | --- | --- | --- |
+| `--mutation-rate` | `-m` | `0.08` | Mutation probability for each non-elite chromosome. |
+| `--elite-ratio` | `-r` | `0.10` | Fraction protected during survivor selection. |
+| `--offspring-ratio` | `-o` | `0.10` | Offspring as a fraction of the target population. |
+| `--min-diversity-ratio` | — | `0.10` | Minimum unique-board ratio before refreshing non-elites. |
+| `--selection` | — | `roulette` | Parent selection: `roulette` or `tournament`. |
+| `--tournament-size` | — | `3` | Positive candidate count per tournament. |
+| `--local-search-rate` | — | `0` | Fraction of non-elites selected for improving swaps. Zero disables local search. |
+| `--local-search-attempts` | — | `8` | Swap attempts per selected candidate. Zero performs no attempts. |
+
+[Choose settings for a specific symptom →](../tuning/#tuning-guidance)
+
+### Output and diagnostics
+
+| Option | Alias | Default | Purpose |
+| --- | --- | --- | --- |
+| `--no-board` | — | Off | Skip the terminal board. |
+| `--metrics-csv` | — | No file | Write every epoch's metrics to the supplied path. |
+| `--json` | — | Off | Emit one JSON summary, suppressing logs and board output. |
+| `--profile` | — | Off | Include cumulative solver phase timings in the summary. |
+| `--log-level` | — | `info` | `off`, `error`, `warn`, `info`, `debug`, or `trace`. |
+| `--quiet` | — | Off | Suppress logs; text summaries and board output still appear. |
+| `--help` | `-h` | — | Print available options. |
+| `--version` | `-V` | — | Print the program version. |
+
+If `--seed` is omitted, the generated seed appears in logs and the JSON summary. Use an explicit seed when suppressing logs.
+
+## Export every epoch
+
+```bash
+cargo run --release --locked -- \
+  --size 18 --population 4000 --epochs 200 --seed 42 \
+  --selection tournament --local-search-rate 0.05 \
+  --metrics-csv run-42.csv --json
+```
+
+The CSV includes configuration, outcomes, elapsed time, best/average conflicts, diversity, adaptive rates, offspring, local-search improvements, and stagnation. Epoch zero is included. CLI CSV export **replaces an existing file** at the chosen path. The [GUI export](../gui/#export-a-run) keeps bounded samples and refuses to overwrite files.
+
+## Read an unsolved outcome
+
+A successful process exit does not necessarily mean a solution was found. For example, this deliberately impossible board stops without evolving:
+
+<!-- docs-check: unsolvable -->
+```bash
+cargo run --release --locked -- \
+  --size 3 --population 16 --epochs 10 --seed 42 --json
+```
+
+Selected fields from the JSON result:
+
+<!-- docs-result: unsolvable -->
+```json
+{
+  "board_size": 3,
+  "solved_epoch": null,
+  "stop_reason": "unsolvable"
+}
+```
 
 ## Outcomes and exit status
 

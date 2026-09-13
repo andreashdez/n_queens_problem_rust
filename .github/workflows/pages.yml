@@ -6,6 +6,7 @@ on:
     paths:
       - "src/**"
       - "public/**"
+      - "scripts/**"
       - "astro.config.mjs"
       - "package.json"
       - "package-lock.json"
@@ -50,6 +51,9 @@ jobs:
           ASTRO_SITE: ${{ steps.pages.outputs.origin }}
           ASTRO_BASE: ${{ steps.pages.outputs.base_path }}
         run: npm run build
+
+      - name: Check built links and assets
+        run: npm run check:links
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

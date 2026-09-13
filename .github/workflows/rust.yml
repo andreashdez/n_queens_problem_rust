@@ -33,7 +33,7 @@ jobs:
     - name: Check formatting
       run: cargo fmt --check
     - name: Run clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
+      run: cargo clippy --all-targets --all-features -- -D clippy::pedantic -D clippy::nursery -D warnings
     - name: Build
       run: cargo build --verbose
     - name: Run default-feature tests
@@ -46,6 +46,20 @@ jobs:
       run: npm ci
     - name: Check docs
       run: npm run check
+    - name: Test documentation checks
+      run: npm run test:docs
+    - name: Verify CLI documentation and examples
+      run: npm run check:examples
+    - name: Build and check docs at the site root
+      env:
+        ASTRO_SITE: https://example.test
+        ASTRO_BASE: /
+      run: npm run build && npm run check:links
+    - name: Build and check docs under a repository subpath
+      env:
+        ASTRO_SITE: https://example.test
+        ASTRO_BASE: /docs-test/
+      run: npm run build && npm run check:links
 
   clippy-sarif:
     name: Clippy SARIF analysis

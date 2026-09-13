@@ -18,12 +18,28 @@ Run the following commands from that directory. The first build downloads and co
 
 ## 2. Run a small board
 
+<!-- docs-check: quickstart -->
 ```bash
 cargo run --release --locked -- \
-  --size 8 --population 256 --epochs 250 --seed 42
+  --size 8 --population 256 --epochs 250 --seed 42 --json
 ```
 
-The terminal reports progress, the best and worst boards, elapsed time, and a stop reason. `solved` means the best board has zero conflicts; `epoch_limit` means the run used its budget without finding a solution. A run can also solve in the initial population, at epoch zero.
+The JSON summary contains these fields (other fields are omitted here):
+
+<!-- docs-result: quickstart -->
+```json
+{
+  "board_size": 8,
+  "seed": 42,
+  "best_chromosome": { "conflicts_sum": 0 },
+  "solved_epoch": 0,
+  "stop_reason": "solved"
+}
+```
+
+This seed already places a solution in the initial population: **epoch zero is a valid solve**. Zero conflicts means no queens attack one another. With other settings, `epoch_limit` means the run used its budget without finding a solution. Runtime varies by machine and is not part of the expected result above.
+
+Remove `--json` to see progress logs, the text summary, and a terminal board.
 
 ## 3. Choose your interface
 
@@ -55,7 +71,19 @@ Place N queens on an N×N board without sharing a row, column, or diagonal. This
 
 [Understand the algorithm →](../algorithm/)
 
+## If the first run does not start
+
+| Symptom | Next step |
+| --- | --- |
+| `cargo` is not found | Install Rust using [rustup](https://rustup.rs/), then open a new terminal. |
+| Cargo cannot find `Cargo.toml` | Change into `n_queens_problem_rust`, the cloned repository directory. |
+| The first build is taking time | Cargo compiles dependencies on the first run. Later builds reuse them. |
+| The GUI cannot open a window | Run it in a desktop session with a graphics backend, or use the CLI on a headless machine. |
+| `Stop reason: epoch_limit` | The program ran successfully. Try the [tuning guide](../tuning/) or a different seed. |
+
 ## Example board output (8x8)
+
+This is an example of the terminal format, not the exact board from the seed above. Each `00` marks a queen with no conflicts.
 
 ```text
 ╔════╤════╤════╤════╤════╤════╤════╤════╗

@@ -6,7 +6,10 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "check": "astro check"
+    "check": "astro check",
+    "check:links": "python3 scripts/check-docs-links.py",
+    "check:examples": "python3 scripts/check-docs-examples.py",
+    "test:docs": "python3 scripts/test-docs-checks.py"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.38.3",

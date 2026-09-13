@@ -20,6 +20,19 @@ Run tuning experiments with `cargo run --release`, fixed `--seed` values, and ei
 
 ## Parameter sweeps
 
+Start with a small sweep: two local-search rates across three seeds, for six runs total.
+
+```bash
+cargo run --release --locked --example parameter_sweep -- \
+  --sizes 18 --populations 4000 --epochs 200 --seeds 3 \
+  --selection-strategies tournament --local-search-rates 0,0.05
+```
+
+<details>
+<summary>Advanced: compare several parameter families</summary>
+
+The following grid contains 128 configurations × 20 seeds = **2,560 runs**. Narrow the ranges first if you are exploring interactively.
+
 Run multiple seeds per configuration and compare solve rate, median solved epoch, and runtime:
 
 ```bash
@@ -37,6 +50,8 @@ cargo run --release --example parameter_sweep -- \
   --local-search-rates 0,0.05 \
   --local-search-attempts 8
 ```
+
+</details>
 
 The sweep prints CSV rows with one aggregate result per parameter combination. Add `--output-dir PATH` to save an experiment to a **new** directory:
 

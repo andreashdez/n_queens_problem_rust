@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="320" viewBox="0 0 800 320">
+  <rect width="800" height="320" rx="16" fill="#122b2b"/>
+  <g font-family="system-ui, sans-serif" font-size="16" fill="#d9eee7">
+    <text x="28" y="32" font-weight="600">Best conflicts · illustrative samples</text>
+    <text x="28" y="59" font-size="13" fill="#acd0c1">Lower is better. Zero means solved.</text>
+    <g stroke="#527569" stroke-width="1">
+      <path d="M60 80H740 M60 165H740 M60 250H740"/>
+    </g>
+    <text x="28" y="85">12</text><text x="36" y="170">6</text><text x="36" y="255">0</text>
+    <path d="M594 80V250" stroke="#f5bf73" stroke-width="2" stroke-dasharray="6 5"/>
+    <text x="610" y="102" fill="#f5bf73" font-weight="600">R · restart</text>
+    <path d="M60 80 269 222 583 222 594 222 740 250" fill="none" stroke="#a9e5d4" stroke-width="3"/>
+    <g fill="#a9e5d4"><circle cx="60" cy="80" r="5"/><circle cx="269" cy="222" r="5"/><circle cx="583" cy="222" r="5"/><circle cx="594" cy="222" r="5"/><circle cx="740" cy="250" r="5"/></g>
+    <text x="285" y="201" font-size="14">No improvement in best score</text>
+    <text x="55" y="277">0</text><text x="258" y="277">20</text><text x="582" y="277">51</text><text x="728" y="277">65</text>
+    <text x="60" y="302" font-size="14">Epoch</text><text x="663" y="302" font-size="14">Solved → 0</text>
+  </g>
+</svg>
