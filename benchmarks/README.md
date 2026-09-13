@@ -14,7 +14,7 @@ All settings use mutation 0.08, elite ratio 0.10, offspring ratio 0.10, minimum 
 | Current default parameters | 40,000 | Roulette | 0 | 20/20 | 81.0 | 373.0 ms |
 | Larger hybrid | 40,000 | Tournament | 0.05 | 20/20 | 15.0 | 112.5 ms |
 
-The compact hybrid is a useful starting point for N=18 and is available through the GUI's **Measured 18×18 values** button. Twenty successful validation seeds are limited evidence, not a guarantee. The population default remains 40,000: it supports the existing pure-GA behavior, while switching the default to local search would change that behavior. The current default epoch budget remains 5,000; these comparisons cap every configuration at 200.
+The compact hybrid is a useful starting point for N=18 and is available through the GUI's **Recommended · 18×18** preset. Twenty successful validation seeds are limited evidence, not a guarantee. The population default remains 40,000: it supports the existing pure-GA behavior, while switching the default to local search would change that behavior. The current default epoch budget remains 5,000; these comparisons cap every configuration at 200.
 
 ```bash
 # Compact hybrid

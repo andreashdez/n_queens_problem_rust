@@ -54,6 +54,8 @@ pub struct EpochMetrics {
     local_search_improvements: usize,
     stagnation_epochs: u32,
     diversity_replacements: usize,
+    restart_count: u32,
+    last_restart_epoch: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -77,6 +79,16 @@ struct PopulationMetrics {
 }
 
 impl EpochMetrics {
+    /// Number of soft restarts completed by this epoch.
+    pub fn restart_count(&self) -> u32 {
+        self.restart_count
+    }
+
+    /// Actual epoch of the most recent soft restart, even if intervening snapshots were skipped.
+    pub fn last_restart_epoch(&self) -> Option<u32> {
+        self.last_restart_epoch
+    }
+
     pub fn epoch(&self) -> u32 {
         self.epoch
     }
@@ -223,6 +235,8 @@ pub struct RunMetrics {
     phase_timings: PhaseTimings,
     profile: bool,
     latest_only: bool,
+    restart_count: u32,
+    last_restart_epoch: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -277,6 +291,8 @@ impl RunMetrics {
             local_search_improvements: context.local_search_improvements,
             stagnation_epochs: context.stagnation_epochs,
             diversity_replacements: context.diversity_replacements,
+            restart_count: self.restart_count,
+            last_restart_epoch: self.last_restart_epoch,
         });
     }
 
@@ -650,6 +666,8 @@ impl GeneticAlgorithm {
                     stagnation_epochs,
                     stagnation_reset_interval,
                 );
+                run_metrics.restart_count += 1;
+                run_metrics.last_restart_epoch = Some(epoch_number);
                 let replaced_count = measure(
                     options.profile,
                     &mut run_metrics.phase_timings.restart_ns,
@@ -1619,6 +1637,32 @@ mod tests {
         GeneticAlgorithm, GeneticAlgorithmParams, SelectionStrategy, build_genetic_algorithm,
         chromosome::Chromosome, pmx,
     };
+
+    #[test]
+    fn restart_metadata_reports_actual_epochs() {
+        let config = GaConfig::new(3, 1, 110, 42)
+            .with_mutation_rate(0.0)
+            .with_offspring_ratio(0.0);
+        let metrics = build_genetic_algorithm(config)
+            .unwrap()
+            .run_algorithm_with_options(
+                super::RunOptions {
+                    allow_unsolvable: true,
+                    ..Default::default()
+                },
+                |_| true,
+            );
+        assert_eq!(metrics.epochs()[0].restart_count(), 0);
+        assert_eq!(metrics.epochs()[0].last_restart_epoch(), None);
+        assert_eq!(metrics.epochs()[50].restart_count(), 0);
+        assert_eq!(metrics.epochs()[51].restart_count(), 1);
+        assert_eq!(metrics.epochs()[70].last_restart_epoch(), Some(51));
+        assert_eq!(metrics.epochs()[101].restart_count(), 2);
+        assert_eq!(
+            metrics.epochs().last().unwrap().last_restart_epoch(),
+            Some(101)
+        );
+    }
 
     #[test]
     fn offspring_only_use_parents_from_the_start_of_mating() {
