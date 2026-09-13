@@ -80,39 +80,52 @@ struct PopulationMetrics {
 
 impl EpochMetrics {
     /// Number of soft restarts completed by this epoch.
-    pub fn restart_count(&self) -> u32 {
+    #[must_use]
+    pub const fn restart_count(&self) -> u32 {
         self.restart_count
     }
 
     /// Actual epoch of the most recent soft restart, even if intervening snapshots were skipped.
-    pub fn last_restart_epoch(&self) -> Option<u32> {
+    #[must_use]
+    pub const fn last_restart_epoch(&self) -> Option<u32> {
         self.last_restart_epoch
     }
 
-    pub fn epoch(&self) -> u32 {
+    #[must_use]
+    pub const fn epoch(&self) -> u32 {
         self.epoch
     }
 
-    pub fn best_conflicts_sum(&self) -> u32 {
+    #[must_use]
+    pub const fn best_conflicts_sum(&self) -> u32 {
         self.best_conflicts_sum
     }
 
-    pub fn population_size(&self) -> usize {
+    #[must_use]
+    pub const fn population_size(&self) -> usize {
         self.population_size
     }
 
-    pub fn elapsed_ms(&self) -> u128 {
+    #[must_use]
+    pub const fn elapsed_ms(&self) -> u128 {
         self.elapsed_ms
     }
 
-    pub fn average_conflicts_sum(&self) -> f32 {
+    #[must_use]
+    pub const fn average_conflicts_sum(&self) -> f32 {
         self.average_conflicts_sum
     }
 
-    pub fn unique_chromosomes(&self) -> usize {
+    #[must_use]
+    pub const fn unique_chromosomes(&self) -> usize {
         self.unique_chromosomes
     }
 
+    #[must_use]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "Diversity is an approximate f32 ratio; integer population counts remain exact."
+    )]
     pub fn diversity_ratio(&self) -> f32 {
         if self.population_size == 0 {
             0.0
@@ -121,27 +134,33 @@ impl EpochMetrics {
         }
     }
 
-    pub fn mutation_rate(&self) -> f32 {
+    #[must_use]
+    pub const fn mutation_rate(&self) -> f32 {
         self.mutation_rate
     }
 
-    pub fn elite_ratio(&self) -> f32 {
+    #[must_use]
+    pub const fn elite_ratio(&self) -> f32 {
         self.elite_ratio
     }
 
-    pub fn offspring_count(&self) -> usize {
+    #[must_use]
+    pub const fn offspring_count(&self) -> usize {
         self.offspring_count
     }
 
-    pub fn local_search_improvements(&self) -> usize {
+    #[must_use]
+    pub const fn local_search_improvements(&self) -> usize {
         self.local_search_improvements
     }
 
-    pub fn stagnation_epochs(&self) -> u32 {
+    #[must_use]
+    pub const fn stagnation_epochs(&self) -> u32 {
         self.stagnation_epochs
     }
 
-    pub fn diversity_replacements(&self) -> usize {
+    #[must_use]
+    pub const fn diversity_replacements(&self) -> usize {
         self.diversity_replacements
     }
 }
@@ -189,7 +208,7 @@ impl Default for RunOptions {
 }
 
 /// Cumulative wall-clock nanoseconds. Phases do not overlap; bookkeeping and callbacks
-/// are excluded. Population metrics include the uniqueness HashSet construction.
+/// are excluded. Population metrics include the uniqueness `HashSet` construction.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PhaseTimings {
     pub crossover_ns: u128,
@@ -203,6 +222,7 @@ pub struct PhaseTimings {
 }
 
 impl PhaseTimings {
+    #[must_use]
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "crossover_ns": self.crossover_ns,
@@ -248,24 +268,29 @@ pub struct EpochSnapshot {
 }
 
 impl RunMetrics {
-    pub fn stop_reason(&self) -> StopReason {
+    #[must_use]
+    pub const fn stop_reason(&self) -> StopReason {
         self.stop_reason
     }
 
     /// None when profiling was not requested.
+    #[must_use]
     pub fn phase_timings(&self) -> Option<&PhaseTimings> {
         self.profile.then_some(&self.phase_timings)
     }
 
+    #[must_use]
     pub fn epochs(&self) -> &[EpochMetrics] {
         &self.epochs
     }
 
-    pub fn solved_epoch(&self) -> Option<u32> {
+    #[must_use]
+    pub const fn solved_epoch(&self) -> Option<u32> {
         self.solved_epoch
     }
 
-    pub fn total_elapsed_ms(&self) -> u128 {
+    #[must_use]
+    pub const fn total_elapsed_ms(&self) -> u128 {
         self.total_elapsed_ms
     }
 
@@ -296,30 +321,34 @@ impl RunMetrics {
         });
     }
 
-    fn mark_solved(&mut self, solved_epoch: u32) {
+    const fn mark_solved(&mut self, solved_epoch: u32) {
         self.solved_epoch = Some(solved_epoch);
         self.stop_reason = StopReason::Solved;
     }
 
-    fn set_total_elapsed_ms(&mut self, total_elapsed_ms: u128) {
+    const fn set_total_elapsed_ms(&mut self, total_elapsed_ms: u128) {
         self.total_elapsed_ms = total_elapsed_ms;
     }
 }
 
 impl EpochSnapshot {
-    pub fn metrics(&self) -> &EpochMetrics {
+    #[must_use]
+    pub const fn metrics(&self) -> &EpochMetrics {
         &self.metrics
     }
 
+    #[must_use]
     pub fn best_positions(&self) -> &[u16] {
         &self.best_positions
     }
 
+    #[must_use]
     pub fn best_conflicts(&self) -> &[u32] {
         &self.best_conflicts
     }
 
-    pub fn best_conflicts_sum(&self) -> u32 {
+    #[must_use]
+    pub const fn best_conflicts_sum(&self) -> u32 {
         self.best_conflicts_sum
     }
 }
@@ -387,7 +416,13 @@ impl fmt::Display for GaConfigError {
 impl Error for GaConfigError {}
 
 impl GaConfig {
-    pub fn new(size: u16, initial_population: usize, max_epoch_count: u32, seed: u64) -> Self {
+    #[must_use]
+    pub const fn new(
+        size: u16,
+        initial_population: usize,
+        max_epoch_count: u32,
+        seed: u64,
+    ) -> Self {
         Self {
             size,
             initial_population,
@@ -404,6 +439,10 @@ impl GaConfig {
         }
     }
 
+    /// Creates a configuration and validates its defaults and dimensions.
+    ///
+    /// # Errors
+    /// Returns [`GaConfigError`] if the board size, population, or epoch budget is zero.
     pub fn try_new(
         size: u16,
         initial_population: usize,
@@ -413,51 +452,68 @@ impl GaConfig {
         Self::new(size, initial_population, max_epoch_count, seed).validated()
     }
 
-    pub fn with_mutation_rate(mut self, mutation_rate: f32) -> Self {
+    #[must_use]
+    pub const fn with_mutation_rate(mut self, mutation_rate: f32) -> Self {
         self.mutation_rate = mutation_rate;
         self
     }
 
-    pub fn with_elite_ratio(mut self, elite_ratio: f32) -> Self {
+    #[must_use]
+    pub const fn with_elite_ratio(mut self, elite_ratio: f32) -> Self {
         self.elite_ratio = elite_ratio;
         self
     }
 
-    pub fn with_offspring_ratio(mut self, offspring_ratio: f32) -> Self {
+    #[must_use]
+    pub const fn with_offspring_ratio(mut self, offspring_ratio: f32) -> Self {
         self.offspring_ratio = offspring_ratio;
         self
     }
 
-    pub fn with_min_diversity_ratio(mut self, min_diversity_ratio: f32) -> Self {
+    #[must_use]
+    pub const fn with_min_diversity_ratio(mut self, min_diversity_ratio: f32) -> Self {
         self.min_diversity_ratio = min_diversity_ratio;
         self
     }
 
-    pub fn with_selection_strategy(mut self, selection_strategy: SelectionStrategy) -> Self {
+    #[must_use]
+    pub const fn with_selection_strategy(mut self, selection_strategy: SelectionStrategy) -> Self {
         self.selection_strategy = selection_strategy;
         self
     }
 
-    pub fn with_tournament_size(mut self, tournament_size: usize) -> Self {
+    #[must_use]
+    pub const fn with_tournament_size(mut self, tournament_size: usize) -> Self {
         self.tournament_size = tournament_size;
         self
     }
 
-    pub fn with_local_search_rate(mut self, local_search_rate: f32) -> Self {
+    #[must_use]
+    pub const fn with_local_search_rate(mut self, local_search_rate: f32) -> Self {
         self.local_search_rate = local_search_rate;
         self
     }
 
-    pub fn with_local_search_attempts(mut self, local_search_attempts: usize) -> Self {
+    #[must_use]
+    pub const fn with_local_search_attempts(mut self, local_search_attempts: usize) -> Self {
         self.local_search_attempts = local_search_attempts;
         self
     }
 
+    /// Validates and returns this configuration.
+    ///
+    /// # Errors
+    /// Returns the same validation errors as [`Self::validate`].
     pub fn validated(self) -> Result<Self, GaConfigError> {
         self.validate()?;
         Ok(self)
     }
 
+    /// Checks dimensions, budgets, rates, and selection settings.
+    ///
+    /// # Errors
+    /// Returns [`GaConfigError`] for zero dimensions or budgets, non-finite rates,
+    /// rates outside `0..=1`, or a zero tournament size.
     pub fn validate(&self) -> Result<(), GaConfigError> {
         if self.size == 0 {
             return Err(GaConfigError::BoardSizeZero);
@@ -530,7 +586,7 @@ struct GeneticAlgorithmParams {
 }
 
 impl GeneticAlgorithm {
-    fn new(population: Vec<Chromosome>, rng: StdRng, params: GeneticAlgorithmParams) -> Self {
+    const fn new(population: Vec<Chromosome>, rng: StdRng, params: GeneticAlgorithmParams) -> Self {
         Self {
             population,
             best_chromosome: None,
@@ -548,7 +604,7 @@ impl GeneticAlgorithm {
         }
     }
 
-    pub fn get_population_size(&self) -> usize {
+    pub const fn get_population_size(&self) -> usize {
         self.population.len()
     }
 
@@ -565,6 +621,10 @@ impl GeneticAlgorithm {
 
     /// Reports epoch zero and each completed epoch. Returning false requests cancellation.
     /// Known impossible boards stop after epoch zero unless `allow_unsolvable` is set.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep epoch ordering, profiling, cancellation, and stop decisions together in the solver loop."
+    )]
     pub fn run_algorithm_with_options<F>(
         &mut self,
         options: RunOptions,
@@ -866,6 +926,11 @@ impl GeneticAlgorithm {
             .expect("population is never empty while running")
     }
 
+    /// Returns a chromosome with the largest conflict count.
+    ///
+    /// # Panics
+    /// Panics if the population is empty. Algorithms created by
+    /// [`build_genetic_algorithm`] maintain a nonempty population.
     pub fn get_worst_chromosome(&self) -> &Chromosome {
         self.population
             .iter()
@@ -891,6 +956,10 @@ impl GeneticAlgorithm {
         }
     }
 
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "Fitness is intentionally calculated in f32 to preserve seeded selection behavior."
+    )]
     fn calc_fitness(&mut self) {
         if self.population.is_empty() {
             return;
@@ -1193,14 +1262,12 @@ impl GeneticAlgorithm {
             return 0;
         }
 
-        self.population
-            .sort_by_key(|chromosome| chromosome.get_conflicts_sum());
+        self.population.sort_by_key(Chromosome::get_conflicts_sum);
 
         let board_size = self
             .population
             .first()
-            .map(|chromosome| chromosome.get_positions().len())
-            .unwrap_or(0);
+            .map_or(0, |chromosome| chromosome.get_positions().len());
         let board_size = u16::try_from(board_size).expect("board size should fit into u16");
 
         for chromosome in self.population.iter_mut().rev().take(replacement_count) {
@@ -1223,16 +1290,20 @@ impl GeneticAlgorithm {
 
         let elite_ratio = normalize_unit_interval(elite_ratio, self.elite_ratio);
 
-        self.population
-            .sort_by_key(|chromosome| chromosome.get_conflicts_sum());
+        self.population.sort_by_key(Chromosome::get_conflicts_sum);
 
         let board_size = self
             .population
             .first()
-            .map(|chromosome| chromosome.get_positions().len())
-            .unwrap_or(0);
+            .map_or(0, |chromosome| chromosome.get_positions().len());
         let board_size = u16::try_from(board_size).expect("board size should fit into u16");
 
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "Rounded restart survivor count is clamped to the available population below."
+        )]
         let mut elite_count =
             ((self.target_population_size as f32) * elite_ratio * SOFT_RESTART_ELITE_RATIO_SCALE)
                 .round() as usize;
@@ -1259,6 +1330,10 @@ impl GeneticAlgorithm {
     }
 }
 
+/// Builds the initial population using the configuration's seed.
+///
+/// # Errors
+/// Returns [`GaConfigError`] if [`GaConfig::validate`] rejects the configuration.
 pub fn build_genetic_algorithm(config: GaConfig) -> Result<GeneticAlgorithm, GaConfigError> {
     config.validate()?;
 
@@ -1290,6 +1365,12 @@ pub fn build_genetic_algorithm(config: GaConfig) -> Result<GeneticAlgorithm, GaC
     ))
 }
 
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "A finite positive ratio is rounded to a nonnegative count; float-to-integer conversion saturates."
+)]
 fn offspring_count_for_population(target_population_size: usize, offspring_ratio: f32) -> usize {
     if target_population_size == 0 || offspring_ratio <= 0.0 || !offspring_ratio.is_finite() {
         return 0;
@@ -1300,6 +1381,10 @@ fn offspring_count_for_population(target_population_size: usize, offspring_ratio
         .max(1.0) as usize
 }
 
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "The average is an approximate f32 metric; exact conflict sums are stored separately."
+)]
 fn population_metrics(population: &[Chromosome]) -> PopulationMetrics {
     if population.is_empty() {
         return PopulationMetrics {
@@ -1335,6 +1420,12 @@ fn population_metrics(population: &[Chromosome]) -> PopulationMetrics {
     }
 }
 
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "The validated positive ratio is rounded up and bounded by the population size."
+)]
 fn minimum_unique_chromosomes(target_population_size: usize, min_diversity_ratio: f32) -> usize {
     if target_population_size == 0 || min_diversity_ratio <= 0.0 || !min_diversity_ratio.is_finite()
     {
@@ -1349,6 +1440,12 @@ fn minimum_unique_chromosomes(target_population_size: usize, min_diversity_ratio
     }
 }
 
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "The validated positive ratio is rounded and bounded by both population sizes."
+)]
 fn elite_count_for_population(
     target_population_size: usize,
     population_size: usize,
@@ -1371,10 +1468,15 @@ fn local_search_candidate_count(non_elite_count: usize, local_search_rate: f32) 
         return 0;
     }
 
-    (((non_elite_count as f32) * local_search_rate)
+    #[allow(clippy::cast_precision_loss)]
+    let non_elite_count = non_elite_count as f32;
+    let count = (non_elite_count * local_search_rate)
         .round()
-        .max(1.0) as usize)
-        .min(non_elite_count)
+        .clamp(1.0, non_elite_count);
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let count = count as usize;
+    count
 }
 
 fn improve_chromosome_with_local_search(
@@ -1417,8 +1519,7 @@ fn select_elites_to_front(population: &mut [Chromosome], elite_count: usize) {
     }
 
     let nth_elite_index = elite_count.saturating_sub(1).min(population.len() - 1);
-    population
-        .select_nth_unstable_by_key(nth_elite_index, |chromosome| chromosome.get_conflicts_sum());
+    population.select_nth_unstable_by_key(nth_elite_index, Chromosome::get_conflicts_sum);
 }
 
 fn cumulative_fitness(population: &[Chromosome]) -> Vec<f32> {
@@ -1439,7 +1540,7 @@ fn is_unit_interval(value: f32) -> bool {
     value.is_finite() && (0.0..=1.0).contains(&value)
 }
 
-fn normalize_unit_interval(value: f32, fallback: f32) -> f32 {
+const fn normalize_unit_interval(value: f32, fallback: f32) -> f32 {
     if value.is_finite() {
         value.clamp(0.0, 1.0)
     } else {
@@ -1447,6 +1548,10 @@ fn normalize_unit_interval(value: f32, fallback: f32) -> f32 {
     }
 }
 
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "Stagnation is normalized to an approximate f32 ratio for adaptive rates."
+)]
 fn adaptive_ga_parameters(
     base_mutation_rate: f32,
     base_elite_ratio: f32,
@@ -1461,10 +1566,11 @@ fn adaptive_ga_parameters(
 
     let mutation_ceiling = MAX_ADAPTIVE_MUTATION_RATE.max(base_mutation_rate);
     let adaptive_mutation_rate = (base_mutation_rate
-        * (1.0 + MUTATION_STAGNATION_BOOST_SCALE * stagnation_ratio))
-        .clamp(0.0, mutation_ceiling);
+        * MUTATION_STAGNATION_BOOST_SCALE.mul_add(stagnation_ratio, 1.0))
+    .clamp(0.0, mutation_ceiling);
 
-    let adaptive_elite_scale = 1.0 - ((1.0 - MIN_ADAPTIVE_ELITE_RATIO_SCALE) * stagnation_ratio);
+    let adaptive_elite_scale =
+        (1.0 - MIN_ADAPTIVE_ELITE_RATIO_SCALE).mul_add(-stagnation_ratio, 1.0);
     let min_elite_ratio = base_elite_ratio.min(MIN_ADAPTIVE_ELITE_RATIO);
     let adaptive_elite_ratio =
         (base_elite_ratio * adaptive_elite_scale).clamp(min_elite_ratio, 1.0);
@@ -1600,7 +1706,7 @@ fn find_position(
 #[cfg(feature = "bench-internals")]
 #[doc(hidden)]
 pub mod benchmarking {
-    use super::*;
+    use super::{GeneticAlgorithm, offspring_count_for_population, population_metrics};
 
     pub fn prepare(algorithm: &mut GeneticAlgorithm) {
         algorithm.calc_fitness();
@@ -1626,6 +1732,10 @@ pub mod benchmarking {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "Tests assert exact copied rates, seeded results, and fitness endpoints; approximate metrics use tolerances."
+)]
 mod tests {
     use proptest::prelude::*;
     use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
@@ -1968,7 +2078,10 @@ mod tests {
         let initial_epoch = &run_metrics.epochs()[0];
         assert_eq!(initial_epoch.epoch(), 0);
         assert!(run_metrics.total_elapsed_ms() >= initial_epoch.elapsed_ms());
-        assert!(initial_epoch.average_conflicts_sum() >= initial_epoch.best_conflicts_sum() as f32);
+        assert!(
+            initial_epoch.average_conflicts_sum()
+                >= f32::from(u16::try_from(initial_epoch.best_conflicts_sum()).unwrap())
+        );
         assert!(initial_epoch.unique_chromosomes() > 0);
         assert!(initial_epoch.diversity_ratio() > 0.0);
         assert_eq!(initial_epoch.mutation_rate(), DEFAULT_MUTATION_RATE);
@@ -2036,7 +2149,10 @@ mod tests {
         assert_eq!(first_epoch.local_search_improvements(), 0);
         assert_eq!(first_epoch.stagnation_epochs(), 1);
         assert_eq!(first_epoch.diversity_replacements(), 0);
-        assert!(first_epoch.average_conflicts_sum() >= first_epoch.best_conflicts_sum() as f32);
+        assert!(
+            first_epoch.average_conflicts_sum()
+                >= f32::from(u16::try_from(first_epoch.best_conflicts_sum()).unwrap())
+        );
         assert!(first_epoch.unique_chromosomes() > 0);
 
         let second_epoch = &run_metrics.epochs()[2];
@@ -2058,7 +2174,7 @@ mod tests {
         let best_seen_conflicts = run_metrics
             .epochs()
             .iter()
-            .map(|metrics| metrics.best_conflicts_sum())
+            .map(super::EpochMetrics::best_conflicts_sum)
             .min()
             .expect("run should record at least the initial epoch");
 
@@ -2450,7 +2566,7 @@ mod tests {
 
             prop_assert_eq!(child.len(), size);
 
-            let mut child_sorted = child.clone();
+            let mut child_sorted = child;
             child_sorted.sort_unstable();
             let expected_values =
                 (0..u16::try_from(size).expect("size should fit into u16")).collect::<Vec<_>>();

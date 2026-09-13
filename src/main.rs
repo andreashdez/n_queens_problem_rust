@@ -30,6 +30,10 @@ const DEFAULT_LOCAL_SEARCH_ATTEMPTS: usize = ga::DEFAULT_LOCAL_SEARCH_ATTEMPTS;
 #[command(
     after_help = "Examples:\n  cargo run --release\n  cargo run --release -- -n 18 -p 40000 -e 5000 -s 42 -m 0.08 -r 0.10 -o 0.10 --local-search-rate 0.05"
 )]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Each boolean represents an independent CLI switch, not mutually exclusive states."
+)]
 struct RunConfig {
     #[arg(
         short = 'n',
@@ -207,13 +211,13 @@ fn print_run_summary_json(
         "local_search_rate": json_ratio(run_config.local_search_rate),
         "local_search_attempts": run_config.local_search_attempts,
         "final_population": final_population,
-        "final_unique_chromosomes": final_epoch.map(|metrics| metrics.unique_chromosomes()),
+        "final_unique_chromosomes": final_epoch.map(ga::EpochMetrics::unique_chromosomes),
         "final_diversity_ratio": final_epoch.map(|metrics| json_ratio(metrics.diversity_ratio())),
         "last_local_search_improvements": final_epoch
-            .map(|metrics| metrics.local_search_improvements())
+            .map(ga::EpochMetrics::local_search_improvements)
             .unwrap_or_default(),
         "last_diversity_replacements": final_epoch
-            .map(|metrics| metrics.diversity_replacements())
+            .map(ga::EpochMetrics::diversity_replacements)
             .unwrap_or_default(),
         "elapsed_ms": run_metrics.total_elapsed_ms(),
         "solved_epoch": run_metrics.solved_epoch(),
@@ -383,20 +387,11 @@ fn parse_log_level(raw_value: &str) -> Result<log::LevelFilter, String> {
     }
 }
 
-fn main() {
-    let run_config = RunConfig::parse();
-    let log_level = if run_config.quiet || run_config.json_output {
-        log::LevelFilter::Off
-    } else {
-        run_config.log_level
-    };
-
-    SimpleLogger::new().with_level(log_level).init().unwrap();
-
-    let seed = run_config
-        .seed
-        .unwrap_or_else(|| rand::rng().random::<u64>());
-    let ga_config = ga::GaConfig::new(
+fn validated_ga_config(
+    run_config: &RunConfig,
+    seed: u64,
+) -> Result<ga::GaConfig, ga::GaConfigError> {
+    ga::GaConfig::new(
         run_config.board_size,
         run_config.population_size,
         run_config.max_epochs,
@@ -411,7 +406,22 @@ fn main() {
     .with_local_search_rate(run_config.local_search_rate)
     .with_local_search_attempts(run_config.local_search_attempts)
     .validated()
-    .unwrap_or_else(|error| {
+}
+
+fn main() {
+    let run_config = RunConfig::parse();
+    let log_level = if run_config.quiet || run_config.json_output {
+        log::LevelFilter::Off
+    } else {
+        run_config.log_level
+    };
+
+    SimpleLogger::new().with_level(log_level).init().unwrap();
+
+    let seed = run_config
+        .seed
+        .unwrap_or_else(|| rand::rng().random::<u64>());
+    let ga_config = validated_ga_config(&run_config, seed).unwrap_or_else(|error| {
         eprintln!("invalid GA config: {error}");
         process::exit(2);
     });
@@ -494,12 +504,12 @@ fn main() {
         println!("Solved Epoch: {solved_epoch}");
     }
 
-    if !run_config.draw_board {
-        println!("Board rendering disabled (--no-board).");
-    } else {
+    if run_config.draw_board {
         let best_positions = best_chromosome.get_positions();
         let best_conflicts = best_chromosome.get_conflicts();
         tui::draw_board(best_positions, best_conflicts);
+    } else {
+        println!("Board rendering disabled (--no-board).");
     }
 
     log::info!("done n_queens_problem");

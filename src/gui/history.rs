@@ -1,10 +1,14 @@
 use std::{
+    fmt::Write as _,
     fs::OpenOptions,
     io::{self, Write},
     path::Path,
 };
 
-use super::*;
+use super::{
+    ATTACKER_COLOR, Arc, BoardView, ChartMarker, ChartSeries, Color32, GuiConfig, NQueensApp,
+    RunResult, SELECTED_QUEEN_COLOR, VecDeque, draw_chart, egui, format_ms, plot_value,
+};
 
 const MAX_SAVED_RUNS: usize = 10;
 
@@ -100,15 +104,15 @@ fn comparison_context(a: &GuiConfig, b: &GuiConfig) -> String {
     } else {
         format!("Different seeds ({} and {})", a.seed, b.seed)
     };
-    if a.board_size != b.board_size {
-        format!(
-            "{seed} · Different board sizes ({} and {}): raw conflict counts are not directly comparable.",
-            a.board_size, b.board_size
-        )
-    } else {
+    if a.board_size == b.board_size {
         format!(
             "{seed} · Both {}×{}. Compare multiple seeds before drawing conclusions about settings.",
             a.board_size, a.board_size
+        )
+    } else {
+        format!(
+            "{seed} · Different board sizes ({} and {}): raw conflict counts are not directly comparable.",
+            a.board_size, b.board_size
         )
     }
 }
@@ -168,21 +172,15 @@ impl SavedRun {
                     .map(|epoch| epoch.to_string())
                     .unwrap_or_default(),
             ];
-            output.push_str(&format!(
-                "sample,{},{}\n",
-                common.join(","),
-                values.join(",")
-            ));
+            writeln!(output, "sample,{},{}", common.join(","), values.join(","))
+                .expect("writing to a String cannot fail");
         }
         // Preserve restart locations even when the corresponding metric sample was decimated.
         for epoch in &history.restart_epochs {
             let mut values = vec![String::new(); 15];
             values[0] = epoch.to_string();
-            output.push_str(&format!(
-                "restart,{},{}\n",
-                common.join(","),
-                values.join(",")
-            ));
+            writeln!(output, "restart,{},{}", common.join(","), values.join(","))
+                .expect("writing to a String cannot fail");
         }
         output
     }
@@ -336,7 +334,7 @@ impl NQueensApp {
                     .history
                     .points
                     .iter()
-                    .map(|point| (point.epoch(), point.best_conflicts_sum() as f32))
+                    .map(|point| (point.epoch(), plot_value(point.best_conflicts_sum())))
                     .collect(),
             })
             .collect();
@@ -379,7 +377,7 @@ impl NQueensApp {
                 if ui.button("Save CSV").clicked() {
                     match self.archive.get(dialog.run_id) {
                         None => {
-                            dialog.error = Some("This run has left the ten-run history.".into())
+                            dialog.error = Some("This run has left the ten-run history.".into());
                         }
                         Some(run) => match run.export_csv(Path::new(dialog.path.trim())) {
                             Ok(()) => {
@@ -402,6 +400,9 @@ impl NQueensApp {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{
+        Duration, GuiPreset, MAX_CHART_POINTS, MetricHistory, Vec2, WorkerMessage, spawn_solver,
+    };
     use super::*;
 
     fn finished(config: GuiConfig) -> Arc<RunResult> {

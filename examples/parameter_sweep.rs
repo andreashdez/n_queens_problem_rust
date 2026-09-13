@@ -282,10 +282,14 @@ fn median_u32(values: &mut [u32]) -> Option<f64> {
     if values.len() % 2 == 1 {
         Some(f64::from(values[middle]))
     } else {
-        Some((f64::from(values[middle - 1]) + f64::from(values[middle])) / 2.0)
+        Some(f64::from(values[middle - 1]).midpoint(f64::from(values[middle])))
     }
 }
 
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "Reported elapsed-time medians are approximate f64 values; raw u128 timings are retained in the run records."
+)]
 fn median_u128(values: &mut [u128]) -> Option<f64> {
     if values.is_empty() {
         return None;
@@ -296,7 +300,7 @@ fn median_u128(values: &mut [u128]) -> Option<f64> {
     if values.len() % 2 == 1 {
         Some(values[middle] as f64)
     } else {
-        Some((values[middle - 1] as f64 + values[middle] as f64) / 2.0)
+        Some((values[middle - 1] as f64).midpoint(values[middle] as f64))
     }
 }
 
@@ -306,6 +310,10 @@ fn format_optional(value: Option<f64>) -> String {
 
 fn summary_row(case: SweepCase, runs: &[SweepRun]) -> String {
     let solved_count = runs.iter().filter(|run| run.solved_epoch.is_some()).count();
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "Solve rate is a reporting ratio; exact run and solve counts are retained separately."
+    )]
     let solve_rate = solved_count as f64 / runs.len() as f64;
     let total_elapsed_ms = runs.iter().map(|run| run.elapsed_ms).sum::<u128>();
     let best_conflicts_min = runs

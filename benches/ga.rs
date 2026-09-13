@@ -4,6 +4,9 @@ use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_ma
 use n_queens_problem::ga::{self, chromosome::Chromosome};
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 
+#[cfg(feature = "bench-internals")]
+type Phase = fn(&mut ga::GeneticAlgorithm) -> usize;
+
 fn shuffled_values(size: u16, seed: u64) -> Vec<u16> {
     let mut values = (0..size).collect::<Vec<_>>();
     let mut rng = StdRng::seed_from_u64(seed);
@@ -72,7 +75,6 @@ fn benchmark_phases(c: &mut Criterion) {
     use ga::benchmarking;
     let mut group = c.benchmark_group("phases");
     group.sample_size(10);
-    type Phase = fn(&mut ga::GeneticAlgorithm) -> usize;
     let phases: [(&str, Phase); 4] = [
         ("crossover", benchmarking::crossover),
         ("mutation", benchmarking::mutation),

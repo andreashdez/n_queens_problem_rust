@@ -22,9 +22,9 @@ pub fn draw_board(positions: &[u16], conflicts: &[u32]) {
                 print!("  ");
             }
             if x < size - 1 {
-                print!(" │ ")
+                print!(" │ ");
             } else {
-                println!(" ║")
+                println!(" ║");
             }
         }
         if y < size - 1 {

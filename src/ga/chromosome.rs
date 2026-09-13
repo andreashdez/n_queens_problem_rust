@@ -61,10 +61,21 @@ impl fmt::Display for ChromosomeError {
 impl Error for ChromosomeError {}
 
 impl Chromosome {
+    /// Creates a chromosome from a row permutation.
+    ///
+    /// # Panics
+    /// Panics if positions are empty, exceed the `u16` board-size range,
+    /// contain duplicates, or contain rows outside the board.
+    #[must_use]
     pub fn new(positions: Vec<u16>) -> Self {
         Self::try_new(positions).expect("chromosome positions must be a valid permutation")
     }
 
+    /// Creates a chromosome after validating its row permutation.
+    ///
+    /// # Errors
+    /// Returns [`ChromosomeError`] for an empty or oversized board,
+    /// duplicate rows, or positions outside the board.
     pub fn try_new(positions: Vec<u16>) -> Result<Self, ChromosomeError> {
         validate_positions(&positions)?;
         Ok(Self::new_unchecked(positions))
@@ -120,15 +131,15 @@ impl Chromosome {
             .as_slice()
     }
 
-    pub fn get_conflicts_sum(&self) -> u32 {
+    pub const fn get_conflicts_sum(&self) -> u32 {
         self.conflicts_sum
     }
 
-    pub fn get_fitness(&self) -> f32 {
+    pub const fn get_fitness(&self) -> f32 {
         self.fitness
     }
 
-    pub fn set_fitness(&mut self, fitness: f32) {
+    pub const fn set_fitness(&mut self, fitness: f32) {
         self.fitness = fitness;
     }
 
@@ -176,12 +187,21 @@ fn validate_positions(positions: &[u16]) -> Result<(), ChromosomeError> {
     Ok(())
 }
 
+/// Generates a shuffled permutation of the board rows.
+///
+/// # Panics
+/// Panics if `size` is zero.
+#[must_use]
 pub fn generate_distinct_random_values(size: u16) -> Vec<u16> {
     assert!(size > 0, "board size must be greater than 0");
     let mut rng = rand::rng();
     generate_distinct_random_values_with_rng(size, &mut rng)
 }
 
+/// Generates a shuffled permutation of the board rows.
+///
+/// # Panics
+/// Panics if `size` is zero.
 pub fn generate_distinct_random_values_with_rng(size: u16, rng: &mut impl Rng) -> Vec<u16> {
     assert!(size > 0, "board size must be greater than 0");
     let mut values = (0..size).collect::<Vec<_>>();
@@ -261,7 +281,7 @@ fn count_conflicts_sum(positions: &[u16]) -> u32 {
         .sum()
 }
 
-fn conflicting_pair_count(count: u32) -> u32 {
+const fn conflicting_pair_count(count: u32) -> u32 {
     count.saturating_sub(1) * count / 2
 }
 
@@ -428,13 +448,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "chromosome positions must be a valid permutation")]
     fn test_new_rejects_invalid_positions() {
-        Chromosome::new(vec![0, 0]);
+        let _ = Chromosome::new(vec![0, 0]);
     }
 
     #[test]
     #[should_panic(expected = "board size must be greater than 0")]
     fn test_initial_values_generator_rejects_zero_size() {
-        generate_distinct_random_values(0);
+        let _ = generate_distinct_random_values(0);
     }
 
     #[test]

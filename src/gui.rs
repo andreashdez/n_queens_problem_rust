@@ -1,5 +1,6 @@
 use std::{
     collections::VecDeque,
+    fmt::Write as _,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -17,6 +18,10 @@ use crate::ga::{self, EpochSnapshot, GaConfig, RunMetrics, SelectionStrategy};
 mod history;
 use history::{ExportDialog, RunArchive};
 
+/// Opens the native solver interface.
+///
+/// # Errors
+/// Returns an eframe error if the window or graphics backend cannot initialize or run.
 pub fn run() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -61,9 +66,11 @@ impl Default for GuiConfig {
             offspring_ratio: ga::DEFAULT_OFFSPRING_RATIO,
             min_diversity_ratio: ga::DEFAULT_MIN_DIVERSITY_RATIO,
             selection_strategy: ga::DEFAULT_SELECTION_STRATEGY,
-            tournament_size: ga::DEFAULT_TOURNAMENT_SIZE as u32,
+            tournament_size: u32::try_from(ga::DEFAULT_TOURNAMENT_SIZE)
+                .expect("default tournament size fits u32"),
             local_search_rate: ga::DEFAULT_LOCAL_SEARCH_RATE,
-            local_search_attempts: ga::DEFAULT_LOCAL_SEARCH_ATTEMPTS as u32,
+            local_search_attempts: u32::try_from(ga::DEFAULT_LOCAL_SEARCH_ATTEMPTS)
+                .expect("default local-search budget fits u32"),
             allow_unsolvable: false,
         }
     }
@@ -111,7 +118,7 @@ impl GuiConfig {
         };
     }
 
-    fn use_fast_demo_values(&mut self) {
+    const fn use_fast_demo_values(&mut self) {
         self.board_size = 8;
         self.population_size = 256;
         self.max_epochs = 250;
@@ -135,7 +142,7 @@ enum GuiPreset {
 impl GuiPreset {
     const ALL: [Self; 3] = [Self::Demo, Self::Measured, Self::Default];
 
-    fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
             Self::Demo => "Quick demo · 8×8",
             Self::Measured => "Recommended · 18×18",
@@ -859,7 +866,8 @@ fn format_ratio(value: f32) -> String {
 
 fn format_ms(ms: u128) -> String {
     if ms >= 1_000 {
-        format!("{:.2}s", ms as f64 / 1_000.0)
+        let centiseconds = ms / 10 + u128::from(ms % 10 >= 5);
+        format!("{}.{:02}s", centiseconds / 100, centiseconds % 100)
     } else {
         format!("{ms} ms")
     }
@@ -930,9 +938,31 @@ impl BoardView {
     }
 }
 
+// A board dimension and its coordinate indices fit the solver's u16 range.
+fn board_units(value: usize) -> f32 {
+    f32::from(u16::try_from(value).expect("board coordinate fits u16"))
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "Chart coordinates are approximate f32 pixels; stored epochs and metrics retain their integer precision."
+)]
+const fn plot_value(value: u32) -> f32 {
+    value as f32
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "Screen-space indices intentionally round down; conversion saturates and callers bound indices to the board."
+)]
+const fn cell_index(value: f32) -> usize {
+    value.max(0.0) as usize
+}
+
 fn visible_cells(start: f32, cell: f32, min: f32, max: f32, size: usize) -> std::ops::Range<usize> {
-    let first = (((min - start) / cell).floor().max(0.0) as usize).min(size);
-    let end = (((max - start) / cell).ceil().max(0.0) as usize).min(size);
+    let first = cell_index(((min - start) / cell).floor()).min(size);
+    let end = cell_index(((max - start) / cell).ceil()).min(size);
     first..end.max(first)
 }
 
@@ -965,8 +995,9 @@ fn queen_at_pointer(rect: Rect, positions: &[u16], pointer: Pos2) -> Option<usiz
     {
         return None;
     }
-    let column = ((pointer.x - rect.left()) / rect.width() * positions.len() as f32) as usize;
-    let row = ((pointer.y - rect.top()) / rect.height() * positions.len() as f32) as usize;
+    let column =
+        cell_index((pointer.x - rect.left()) / rect.width() * board_units(positions.len()));
+    let row = cell_index((pointer.y - rect.top()) / rect.height() * board_units(positions.len()));
     positions
         .get(column)
         .filter(|&&queen_row| usize::from(queen_row) == row)
@@ -974,10 +1005,10 @@ fn queen_at_pointer(rect: Rect, positions: &[u16], pointer: Pos2) -> Option<usiz
 }
 
 fn queen_center(rect: Rect, size: usize, column: usize, row: usize) -> Pos2 {
-    let cell = rect.width() / size as f32;
+    let cell = rect.width() / board_units(size);
     Pos2::new(
-        rect.left() + (column as f32 + 0.5) * cell,
-        rect.top() + (row as f32 + 0.5) * cell,
+        (board_units(column) + 0.5).mul_add(cell, rect.left()),
+        (board_units(row) + 0.5).mul_add(cell, rect.top()),
     )
 }
 
@@ -997,6 +1028,10 @@ fn diagonal_segment(rect: Rect, center: Pos2, descending: bool) -> [Pos2; 2] {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keep immediate-mode board interaction and its layered rendering in the same frame scope."
+)]
 fn draw_board(
     ui: &mut egui::Ui,
     positions: &[u16],
@@ -1036,20 +1071,23 @@ fn draw_board(
         ui.weak("Drag to pan · Ctrl/⌘ + scroll or pinch to zoom");
     });
     let gutter = 28.0;
-    let side = (ui.available_width() - gutter).clamp(1.0, 620.0);
+    let board_side = (ui.available_width() - gutter).clamp(1.0, 620.0);
     let (outer, response) =
-        ui.allocate_exact_size(Vec2::splat(side + gutter), Sense::click_and_drag());
-    let viewport = Rect::from_min_size(outer.min + Vec2::splat(gutter), Vec2::splat(side));
+        ui.allocate_exact_size(Vec2::splat(board_side + gutter), Sense::click_and_drag());
+    let viewport = Rect::from_min_size(outer.min + Vec2::splat(gutter), Vec2::splat(board_side));
     if response.dragged() {
-        view.move_by(response.drag_delta() / side);
+        view.move_by(response.drag_delta() / board_side);
     }
     if let Some(pointer) = response
         .hover_pos()
         .filter(|point| viewport.contains(*point))
     {
-        let zoom_delta = ui.input(|input| input.zoom_delta());
-        if zoom_delta != 1.0 {
-            view.set_zoom(view.zoom * zoom_delta, (pointer - viewport.min) / side);
+        let zoom_delta = ui.input(eframe::egui::InputState::zoom_delta);
+        if (zoom_delta - 1.0).abs() > f32::EPSILON {
+            view.set_zoom(
+                view.zoom * zoom_delta,
+                (pointer - viewport.min) / board_side,
+            );
         }
     }
     let rect = view.rect(viewport);
@@ -1077,7 +1115,7 @@ fn draw_board(
     }
     let painter = ui.painter_at(viewport);
     let axes_painter = ui.painter_at(outer);
-    let cell = rect.width() / size as f32;
+    let cell = rect.width() / board_units(size);
     if cell >= 6.0 {
         draw_board_cells(&painter, rect, size, cell);
     } else {
@@ -1112,15 +1150,15 @@ fn draw_board(
     }
 
     // Keep coordinates legible on large boards, including the selected row/column.
-    let stride = (24.0 / cell).ceil().max(1.0) as usize;
+    let stride = cell_index((24.0 / cell).ceil()).max(1);
     for index in 0..size {
         let regular = index.is_multiple_of(stride) || index == size - 1;
         let selected_column = *selected == Some(index);
         let selected_row = selected.is_some_and(|column| usize::from(positions[column]) == index);
         let coordinate = (index + 1).to_string();
         let font = FontId::monospace(11.0);
-        let x = rect.left() + (index as f32 + 0.5) * cell;
-        let y = rect.top() + (index as f32 + 0.5) * cell;
+        let x = (board_units(index) + 0.5).mul_add(cell, rect.left());
+        let y = (board_units(index) + 0.5).mul_add(cell, rect.top());
         if (regular || selected_column) && x >= viewport.left() && x <= viewport.right() {
             axes_painter.text(
                 Pos2::new(x, viewport.top() - 12.0),
@@ -1228,10 +1266,13 @@ fn draw_board_cells(painter: &egui::Painter, rect: Rect, size: usize, cell: f32)
     for y in visible_cells(rect.top(), cell, clip.top(), clip.bottom(), size) {
         for x in visible_cells(rect.left(), cell, clip.left(), clip.right(), size) {
             let cell_rect = Rect::from_min_max(
-                Pos2::new(rect.left() + x as f32 * cell, rect.top() + y as f32 * cell),
                 Pos2::new(
-                    rect.left() + (x + 1) as f32 * cell,
-                    rect.top() + (y + 1) as f32 * cell,
+                    board_units(x).mul_add(cell, rect.left()),
+                    board_units(y).mul_add(cell, rect.top()),
+                ),
+                Pos2::new(
+                    rect.left() + board_units(x + 1) * cell,
+                    rect.top() + board_units(y + 1) * cell,
                 ),
             );
             let color = if (x + y) % 2 == 0 { light } else { dark };
@@ -1248,11 +1289,11 @@ fn draw_sparse_grid(painter: &egui::Painter, rect: Rect, size: usize, cell: f32)
     );
     let stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(120, 210, 220, 45));
     let clip = painter.clip_rect();
-    let stride = (24.0 / cell).ceil().max(1.0) as usize;
+    let stride = cell_index((24.0 / cell).ceil()).max(1);
     for index in visible_cells(rect.left(), cell, clip.left(), clip.right(), size + 1)
         .filter(|index| index.is_multiple_of(stride))
     {
-        let x = rect.left() + index as f32 * cell;
+        let x = board_units(index).mul_add(cell, rect.left());
         painter.line_segment(
             [Pos2::new(x, clip.top()), Pos2::new(x, clip.bottom())],
             stroke,
@@ -1261,7 +1302,7 @@ fn draw_sparse_grid(painter: &egui::Painter, rect: Rect, size: usize, cell: f32)
     for index in visible_cells(rect.top(), cell, clip.top(), clip.bottom(), size + 1)
         .filter(|index| index.is_multiple_of(stride))
     {
-        let y = rect.top() + index as f32 * cell;
+        let y = board_units(index).mul_add(cell, rect.top());
         painter.line_segment(
             [Pos2::new(clip.left(), y), Pos2::new(clip.right(), y)],
             stroke,
@@ -1269,7 +1310,7 @@ fn draw_sparse_grid(painter: &egui::Painter, rect: Rect, size: usize, cell: f32)
     }
 }
 
-fn queen_color(conflicts: u32) -> Color32 {
+const fn queen_color(conflicts: u32) -> Color32 {
     match conflicts {
         0 => Color32::from_rgb(95, 220, 140),
         1 | 2 => Color32::from_rgb(245, 190, 85),
@@ -1309,7 +1350,7 @@ fn draw_charts(ui: &mut egui::Ui, history: &MetricHistory) {
             color: Color32::from_rgb(95, 220, 140),
             values: snapshots
                 .iter()
-                .map(|snapshot| (snapshot.epoch(), snapshot.best_conflicts_sum() as f32))
+                .map(|snapshot| (snapshot.epoch(), plot_value(snapshot.best_conflicts_sum())))
                 .collect(),
         },
         ChartSeries {
@@ -1395,7 +1436,8 @@ fn draw_chart(
     draw_chart_grid(&painter, plot_rect, max_epoch, max_value);
 
     for marker in markers {
-        let x = plot_rect.left() + plot_rect.width() * marker.epoch as f32 / max_epoch as f32;
+        let x =
+            plot_rect.left() + plot_rect.width() * plot_value(marker.epoch) / plot_value(max_epoch);
         painter.line_segment(
             [
                 Pos2::new(x, plot_rect.top()),
@@ -1430,16 +1472,19 @@ fn draw_chart(
         let mut tooltip = String::from("Nearest retained samples (no extrapolation)");
         for line in series {
             if let Some((sample_epoch, value)) = nearest_chart_sample(&line.values, epoch) {
-                tooltip.push_str(&format!(
+                write!(
+                    tooltip,
                     "\n{} · epoch {}: {:.3}",
                     line.label, sample_epoch, value
-                ));
+                )
+                .expect("writing to a String cannot fail");
                 painter.circle_filled(
                     Pos2::new(
                         plot_rect.left()
-                            + plot_rect.width() * sample_epoch as f32 / max_epoch as f32,
-                        plot_rect.bottom()
-                            - plot_rect.height() * (value / max_value).clamp(0.0, 1.0),
+                            + plot_rect.width() * plot_value(sample_epoch) / plot_value(max_epoch),
+                        plot_rect
+                            .height()
+                            .mul_add(-(value / max_value).clamp(0.0, 1.0), plot_rect.bottom()),
                     ),
                     4.0,
                     line.color,
@@ -1452,7 +1497,8 @@ fn draw_chart(
             .filter(|marker| (f64::from(marker.epoch) - epoch).abs() <= tolerance)
             .take(6)
         {
-            tooltip.push_str(&format!("\n{} at epoch {}", marker.label, marker.epoch));
+            write!(tooltip, "\n{} at epoch {}", marker.label, marker.epoch)
+                .expect("writing to a String cannot fail");
         }
         response.on_hover_text(tooltip);
     }
@@ -1485,9 +1531,9 @@ fn draw_chart_grid(painter: &egui::Painter, rect: Rect, max_epoch: u32, max_valu
     let grid_stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(180, 205, 220, 32));
     let text_color = Color32::from_rgb(150, 165, 180);
 
-    for index in 0..=4 {
-        let t = index as f32 / 4.0;
-        let y = rect.bottom() - rect.height() * t;
+    for index in 0_u16..=4 {
+        let t = f32::from(index) / 4.0;
+        let y = rect.height().mul_add(-t, rect.bottom());
         painter.line_segment(
             [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
             grid_stroke,
@@ -1501,10 +1547,10 @@ fn draw_chart_grid(painter: &egui::Painter, rect: Rect, max_epoch: u32, max_valu
         );
     }
 
-    let steps = max_epoch.min(4);
+    let steps = u16::try_from(max_epoch.min(4)).expect("at most four chart intervals");
     for index in 0..=steps {
-        let t = index as f32 / steps as f32;
-        let x = rect.left() + rect.width() * t;
+        let t = f32::from(index) / f32::from(steps);
+        let x = rect.width().mul_add(t, rect.left());
         painter.line_segment(
             [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
             grid_stroke,
@@ -1512,7 +1558,8 @@ fn draw_chart_grid(painter: &egui::Painter, rect: Rect, max_epoch: u32, max_valu
         painter.text(
             Pos2::new(x, rect.bottom() + 6.0),
             Align2::CENTER_TOP,
-            format!("{}", (max_epoch as f32 * t).round() as u32),
+            ((u64::from(max_epoch) * u64::from(index) + u64::from(steps) / 2) / u64::from(steps))
+                .to_string(),
             FontId::monospace(11.0),
             text_color,
         );
@@ -1527,8 +1574,12 @@ fn draw_chart_series(
     series: &ChartSeries,
 ) {
     let to_pos = |epoch: u32, value: f32| {
-        let x = rect.left() + rect.width() * (epoch as f32 / max_epoch as f32);
-        let y = rect.bottom() - rect.height() * (value / max_value).clamp(0.0, 1.0);
+        let x = rect
+            .width()
+            .mul_add(plot_value(epoch) / plot_value(max_epoch), rect.left());
+        let y = rect
+            .height()
+            .mul_add(-(value / max_value).clamp(0.0, 1.0), rect.bottom());
         Pos2::new(x, y)
     };
     let stroke = Stroke::new(2.0, series.color);
@@ -1545,8 +1596,25 @@ fn draw_chart_series(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "These tests check exact preset values and clamped zoom limits, not approximate calculations."
+)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn elapsed_time_display_rounds_without_narrowing_or_overflow() {
+        assert_eq!(format_ms(999), "999 ms");
+        assert_eq!(format_ms(1_000), "1.00s");
+        assert_eq!(format_ms(1_004), "1.00s");
+        assert_eq!(format_ms(1_005), "1.01s");
+        assert_eq!(format_ms(9_995), "10.00s");
+        assert_eq!(
+            format_ms(u128::MAX),
+            "340282366920938463463374607431768211.46s"
+        );
+    }
 
     #[test]
     fn board_zoom_preserves_pointer_anchor_and_pan_is_bounded() {
