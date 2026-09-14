@@ -71,19 +71,35 @@ All settings use mutation 0.08, elite ratio 0.10, offspring ratio 0.10, minimum 
 | Classic GA (defaults before 2026-09-14) | 40,000 | Roulette | 0 | 20/20 | 74.5 | 195.5 ms |
 | Larger hybrid | 40,000 | Tournament | 0.05 | 20/20 | 20.0 | 81.0 ms |
 
-These five configurations all pass their parameters explicitly and none of them is the shipped default; see **Choosing the defaults** above for that. The compact hybrid is worth trying when a board stalls close to a solution at N=18, and is available through the GUI's **Local-search hybrid · 18×18** preset. Twenty successful validation seeds are limited evidence, not a guarantee. The default epoch budget remains 5,000; these comparisons cap every configuration at 200, which is why the small-population defaults measured in the section above are not directly comparable to this table.
+None of these five configurations is the shipped default; see **Choosing the defaults** above. The compact hybrid is worth trying when a board stalls close to a solution at N=18. Twenty successful validation seeds are limited evidence, not a guarantee.
+
+The GUI's **Local-search hybrid · 18×18** preset uses today's mutation and offspring defaults and a 5,000-epoch budget, so it differs from the archived compact-hybrid configuration. These measurements cap every configuration at 200 epochs; the small-population defaults measured above use a 5,000-epoch budget and are not directly comparable.
 
 Do not read the runtime column as a direct measure of the optimizations. Every row solves on a different epoch than it did on 2026-09-12, because survivor selection changed the RNG draw sequence, so each runtime mixes the lower per-epoch cost with a different number of epochs. The 40,000-population rows also gained more than the 4,000-population rows, because only they clear the parallel-crossover threshold. Use the phase figures below for speed, and this table for configuration choice.
 
+The commands below specify every GA parameter. Use the matching archived source tree for exact reproduction; running them in a newer checkout applies the same settings to that implementation.
+
 ```bash
 # Compact hybrid
-cargo run --release --locked -- --size 18 --population 4000 --epochs 200 --seed 42 --selection tournament --local-search-rate 0.05
+cargo run --release --locked -- \
+  --size 18 --population 4000 --epochs 200 --seed 42 \
+  --mutation-rate 0.08 --elite-ratio 0.10 --offspring-ratio 0.10 \
+  --min-diversity-ratio 0.10 --selection tournament --tournament-size 3 \
+  --local-search-rate 0.05 --local-search-attempts 8
 
 # Roulette hybrid
-cargo run --release --locked -- --size 18 --population 4000 --epochs 200 --seed 42 --selection roulette --local-search-rate 0.05
+cargo run --release --locked -- \
+  --size 18 --population 4000 --epochs 200 --seed 42 \
+  --mutation-rate 0.08 --elite-ratio 0.10 --offspring-ratio 0.10 \
+  --min-diversity-ratio 0.10 --selection roulette --tournament-size 3 \
+  --local-search-rate 0.05 --local-search-attempts 8
 
 # Pure GA
-cargo run --release --locked -- --size 18 --population 40000 --epochs 200 --seed 42 --selection tournament --local-search-rate 0
+cargo run --release --locked -- \
+  --size 18 --population 40000 --epochs 200 --seed 42 \
+  --mutation-rate 0.08 --elite-ratio 0.10 --offspring-ratio 0.10 \
+  --min-diversity-ratio 0.10 --selection tournament --tournament-size 3 \
+  --local-search-rate 0 --local-search-attempts 8
 ```
 
 ## Evidence and reproduction
@@ -95,9 +111,27 @@ cargo run --release --locked -- --size 18 --population 40000 --epochs 200 --seed
 Each directory contains `runs.jsonl`, `metadata.json`, and `source.tar.gz`. The archive contains the exact workspace Rust sources, lockfile, toolchain, and tracked patch captured at the start of that experiment. Sources were captured while the optimization change was uncommitted, so `metadata.json` records commit `b1057a0` with a dirty tree and the patch carries the actual solver under test. `metadata.json` records `uname -srvm` rather than `uname -a`, so the committed environment description omits the hostname of the machine that ran the sweep. Archives were created after the runs to keep the committed evidence compact; the sweep itself writes an uncompressed `source/` directory and `source.patch`.
 
 ```bash
-cargo run --release --locked --example parameter_sweep -- --sizes 18 --populations 1000,4000,40000 --epochs 200 --seeds 10 --selection-strategies roulette,tournament --local-search-rates 0,0.05 --output-dir exploration-new
-cargo run --release --locked --example parameter_sweep -- --sizes 18 --populations 4000,40000 --epochs 200 --seed-start 101 --seeds 20 --selection-strategies roulette,tournament --local-search-rates 0,0.05 --output-dir validation-new
-cargo run --release --locked --example parameter_sweep -- --sizes 18 --populations 4000,40000 --epochs 200 --seeds 10 --selection-strategies tournament --local-search-rates 0.05 --profile --output-dir profile-new
+cargo run --release --locked --example parameter_sweep -- \
+  --sizes 18 --populations 1000,4000,40000 --epochs 200 --seeds 10 \
+  --mutation-rates 0.08 --elite-ratios 0.10 --offspring-ratios 0.10 \
+  --min-diversity-ratios 0.10 \
+  --selection-strategies roulette,tournament --tournament-sizes 3 \
+  --local-search-rates 0,0.05 --local-search-attempts 8 \
+  --output-dir exploration-new
+cargo run --release --locked --example parameter_sweep -- \
+  --sizes 18 --populations 4000,40000 --epochs 200 --seed-start 101 --seeds 20 \
+  --mutation-rates 0.08 --elite-ratios 0.10 --offspring-ratios 0.10 \
+  --min-diversity-ratios 0.10 \
+  --selection-strategies roulette,tournament --tournament-sizes 3 \
+  --local-search-rates 0,0.05 --local-search-attempts 8 \
+  --output-dir validation-new
+cargo run --release --locked --example parameter_sweep -- \
+  --sizes 18 --populations 4000,40000 --epochs 200 --seeds 10 \
+  --mutation-rates 0.08 --elite-ratios 0.10 --offspring-ratios 0.10 \
+  --min-diversity-ratios 0.10 \
+  --selection-strategies tournament --tournament-sizes 3 \
+  --local-search-rates 0.05 --local-search-attempts 8 --profile \
+  --output-dir profile-new
 ```
 
 ## Phase costs

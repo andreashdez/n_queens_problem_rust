@@ -6,10 +6,14 @@ description: "Run the desktop solver, inspect conflicts, compare experiments, an
 Run the native desktop GUI:
 
 ```bash
-cargo run --release --features gui --bin n_queens_gui
+cargo run --release --locked --features gui --bin n_queens_gui
 ```
 
 The native GUI runs the solver in the background while you inspect the best board and follow its progress. Start with **Quick demo · 8×8**. A solved run may finish at epoch zero if its initial population already includes a solution.
+
+![N-Queens desktop GUI showing a solved 18×18 board, solver settings, run history, and conflict and population-ratio charts.](../../assets/gui-overview.jpg)
+
+*Recommended defaults · 18×18, seed 42: solved at epoch 39. Captured on macOS; runtime varies by machine.*
 
 ## Configure a run
 

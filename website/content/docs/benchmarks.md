@@ -14,11 +14,15 @@ These measurements were recorded on **2026-09-14**, on macOS/aarch64 with eight 
 | Pure GA | 40,000 | Tournament | 0 | 20/20 | 101.5 ms |
 | Classic GA (defaults before 2026-09-14) | 40,000 | Roulette | 0 | 20/20 | 195.5 ms |
 
-These four configurations pass their parameters explicitly; none is the shipped default. They support trying the compact hybrid when a board stalls near a solution at N=18, and do not guarantee success or generalize to other board sizes. The GUI includes a **Local-search hybrid · 18×18** preset.
+All four measured configurations used mutation 0.08, elite ratio 0.10, offspring ratio 0.10, minimum diversity 0.10, tournament size 3, and eight local-search attempts. None is the shipped default. They support trying local search when a board stalls near a solution at N=18; success is not guaranteed, and these results do not generalize to other board sizes.
+
+The GUI's **Local-search hybrid · 18×18** preset uses today's mutation and offspring defaults and a 5,000-epoch budget. It is not the archived compact-hybrid configuration in this table.
 
 ## The shipped defaults changed
 
 On 2026-09-14 the defaults moved from a 40,000-member roulette population to a 500-member tournament population with higher turnover: `--population 500`, `--selection tournament`, `--mutation-rate 0.16`, `--offspring-ratio 0.50`. Compared head to head on 50 seeds that no tuning stage had used, both solved 50/50 at board sizes 8, 18, 32, 64, and 100, while the new defaults ran 32x to 68x faster. Every previous value is still available as a flag, and the GUI keeps them as its **Classic genetic algorithm · 18×18** preset. The [benchmark report](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/README.md#choosing-the-defaults) records the sweeps and the trade-offs behind each value.
+
+To run the measured compact-hybrid settings, pass every parameter explicitly. For exact reproduction, run this command from the matching archived source tree described below.
 
 ```bash
 cargo run --release --locked -- \
@@ -26,8 +30,9 @@ cargo run --release --locked -- \
   --population 4000 \
   --epochs 200 \
   --seed 42 \
-  --selection tournament \
-  --local-search-rate 0.05
+  --mutation-rate 0.08 --elite-ratio 0.10 --offspring-ratio 0.10 \
+  --min-diversity-ratio 0.10 --selection tournament --tournament-size 3 \
+  --local-search-rate 0.05 --local-search-attempts 8
 ```
 
 The repository’s [benchmark report](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/README.md) contains the other preset commands, methodology, raw seed results, source archives, and phase measurements.

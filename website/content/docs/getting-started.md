@@ -55,12 +55,11 @@ Choose **Quick demo · 8×8**, then **Run solver**. Inspect queens, hover over t
 
 ### Run reproducible experiments
 
-Use a fixed seed and keep your source revision and dependency versions when comparing runs. For an N=18 configuration measured in this repository:
+Use a fixed seed and keep your source revision and dependency versions when comparing runs. To try the same recommended defaults shown in the GUI screenshot:
 
 ```bash
 cargo run --release --locked -- \
-  --size 18 --population 4000 --epochs 200 --seed 42 \
-  --selection tournament --local-search-rate 0.05
+  --size 18 --seed 42
 ```
 
 [Browse CLI options →](../cli/) · [Read the benchmark methodology →](../benchmarks/)

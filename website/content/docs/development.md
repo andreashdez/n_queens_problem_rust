@@ -38,4 +38,20 @@ For local editing, `npm run dev` starts the documentation server. The site lives
 
 GitHub Actions builds the site with the repository's Pages origin and base path. Pushes to `main` that change documentation or site assets trigger deployment. The GitHub Wiki Home links to the published guides; the Pages site is the full documentation.
 
+## Update the GUI screenshot
+
+The README, homepage, and GUI guide share `website/assets/gui-overview.jpg`. The current image was captured on macOS from revision `fea5200` using **Recommended defaults · 18×18**, seed **42**, which solved at epoch **39**.
+
+1. Build and launch the current GUI with `cargo run --release --locked --features gui --bin n_queens_gui`.
+2. Select the recommended preset, set seed 42, and click **Run solver**.
+3. Resize the window and, if needed, reduce the interface scale with Ctrl/⌘ + **−** so the board and both charts are fully visible. Capture only the application window.
+4. Replace the shared image and update the captions and this capture record if the preset, seed, or outcome changes. Keep the filename extension consistent with the image format.
+5. Run the documentation build and link checks above.
+
+The screenshot records a real run. Its elapsed time is illustrative, not a benchmark.
+
+## GitHub Wiki sync
+
+Enable **Wikis** under the repository's **Settings → General → Features**. The `.github/workflows/wiki-sync.yml` workflow regenerates Wiki `Home.md` from guide titles and descriptions when `website/content/docs/` changes on `main`; it can also be run manually.
+
 [Return to getting started →](../getting-started/)
