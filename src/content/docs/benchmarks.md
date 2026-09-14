@@ -5,16 +5,20 @@ description: "Measured presets, reproducibility details, and phase-level profili
 
 ## Measured N=18 presets
 
-These measurements were recorded on **2026-09-12**, on macOS/aarch64 with eight Rayon threads and Rust 1.98.1. Each configuration used a 200-epoch budget and independent validation seeds 101–120. They describe the archived implementation, rather than a new timing of your current checkout.
+These measurements were recorded on **2026-09-14**, on macOS/aarch64 with eight Rayon threads and Rust 1.98.1. Each configuration used a 200-epoch budget and independent validation seeds 101–120. They describe the archived implementation, rather than a new timing of your current checkout.
 
 | Preset | Population | Selection | Local-search rate | Solved | Median runtime |
 | --- | ---: | --- | ---: | ---: | ---: |
-| Compact hybrid | 4,000 | Tournament | 0.05 | 20/20 | 41.5 ms |
-| Roulette hybrid | 4,000 | Roulette | 0.05 | 20/20 | 69.0 ms |
-| Pure GA | 40,000 | Tournament | 0 | 20/20 | 259.5 ms |
-| Current default parameters | 40,000 | Roulette | 0 | 20/20 | 373.0 ms |
+| Compact hybrid | 4,000 | Tournament | 0.05 | 20/20 | 35.5 ms |
+| Roulette hybrid | 4,000 | Roulette | 0.05 | 20/20 | 44.0 ms |
+| Pure GA | 40,000 | Tournament | 0 | 20/20 | 101.5 ms |
+| Classic GA (defaults before 2026-09-14) | 40,000 | Roulette | 0 | 20/20 | 195.5 ms |
 
-All other GA parameters use their defaults. These measurements support trying the compact hybrid for N=18; they do not guarantee success or generalize to other board sizes. The default population and 5,000-epoch budget remain unchanged. The GUI includes a **Recommended · 18×18** preset.
+These four configurations pass their parameters explicitly; none is the shipped default. They support trying the compact hybrid when a board stalls near a solution at N=18, and do not guarantee success or generalize to other board sizes. The GUI includes a **Local-search hybrid · 18×18** preset.
+
+## The shipped defaults changed
+
+On 2026-09-14 the defaults moved from a 40,000-member roulette population to a 500-member tournament population with higher turnover: `--population 500`, `--selection tournament`, `--mutation-rate 0.16`, `--offspring-ratio 0.50`. Compared head to head on 50 seeds that no tuning stage had used, both solved 50/50 at board sizes 8, 18, 32, 64, and 100, while the new defaults ran 32x to 68x faster. Every previous value is still available as a flag, and the GUI keeps them as its **Classic genetic algorithm · 18×18** preset. The [benchmark report](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/README.md#choosing-the-defaults) records the sweeps and the trade-offs behind each value.
 
 ```bash
 cargo run --release --locked -- \
@@ -41,12 +45,12 @@ The table shows four selected presets. The complete validation includes all eigh
 
 | Evidence | What it contains |
 | --- | --- |
-| [All validation results](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-09-12-validation/summary.csv) | Aggregate results for all eight configurations. |
-| [Per-seed records](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-09-12-validation/runs.jsonl) | Configuration, result, and elapsed time for each validation run. |
-| [Environment metadata](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-09-12-validation/metadata.json) | Compiler, machine, thread count, and source state. |
-| [Archived source](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-09-12-validation/source.tar.gz) | Exact code and lockfile captured for the validation. |
-| [Exploration results](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-09-12-n18/summary.csv) | Earlier experiments using seeds 1–10. |
-| [Criterion output](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-09-12-criterion.txt) | Phase estimates and reported outliers. |
+| [All validation results](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-09-14-validation/summary.csv) | Aggregate results for all eight configurations. |
+| [Per-seed records](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-09-14-validation/runs.jsonl) | Configuration, result, and elapsed time for each validation run. |
+| [Environment metadata](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-09-14-validation/metadata.json) | Compiler, machine, thread count, and source state. |
+| [Archived source](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-09-14-validation/source.tar.gz) | Exact code and lockfile captured for the validation. |
+| [Exploration results](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-09-14-n18/summary.csv) | Earlier experiments using seeds 1–10. |
+| [Criterion output](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-09-14-criterion.txt) | Phase estimates and reported outliers. |
 
 ## Profiling
 

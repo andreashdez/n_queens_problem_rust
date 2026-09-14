@@ -1,0 +1,124 @@
+   Compiling n_queens_problem v0.1.0 (/Users/andreas/dev/n_queens_problem_rust)
+    Finished `bench` profile [optimized] target(s) in 1.88s
+     Running benches/ga.rs (target/release/deps/ga-b9d714615dceb73d)
+Benchmarking count_conflicts/8
+Benchmarking count_conflicts/8: Warming up for 200.00 ms
+Benchmarking count_conflicts/8: Collecting 10 samples in estimated 500.00 ms (4.2M iterations)
+Benchmarking count_conflicts/8: Analyzing
+count_conflicts/8       time:   [102.24 ns 102.48 ns 103.11 ns]
+                        change: [+1.5803% +2.6487% +3.8037%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking count_conflicts/32
+Benchmarking count_conflicts/32: Warming up for 200.00 ms
+Benchmarking count_conflicts/32: Collecting 10 samples in estimated 500.00 ms (3.0M iterations)
+Benchmarking count_conflicts/32: Analyzing
+count_conflicts/32      time:   [151.02 ns 152.70 ns 155.45 ns]
+                        change: [+6.6464% +8.1193% +9.5960%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking count_conflicts/64
+Benchmarking count_conflicts/64: Warming up for 200.00 ms
+Benchmarking count_conflicts/64: Collecting 10 samples in estimated 500.00 ms (2.3M iterations)
+Benchmarking count_conflicts/64: Analyzing
+count_conflicts/64      time:   [211.48 ns 212.65 ns 213.65 ns]
+                        change: [+3.5431% +4.5023% +5.4561%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking count_conflicts/128
+Benchmarking count_conflicts/128: Warming up for 200.00 ms
+Benchmarking count_conflicts/128: Collecting 10 samples in estimated 500.01 ms (1.3M iterations)
+Benchmarking count_conflicts/128: Analyzing
+count_conflicts/128     time:   [363.78 ns 365.64 ns 369.16 ns]
+                        change: [+2.2914% +3.1167% +3.8608%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+
+Benchmarking epoch_loop/n12_p600_e80
+Benchmarking epoch_loop/n12_p600_e80: Warming up for 200.00 ms
+Benchmarking epoch_loop/n12_p600_e80: Collecting 10 samples in estimated 548.92 ms (385 iterations)
+Benchmarking epoch_loop/n12_p600_e80: Analyzing
+epoch_loop/n12_p600_e80 time:   [1.2709 ms 1.2778 ms 1.2839 ms]
+                        change: [−1.2659% −0.1388% +0.8973%] (p = 0.81 > 0.05)
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+Benchmarking epoch_loop/n16_p1200_e120
+Benchmarking epoch_loop/n16_p1200_e120: Warming up for 200.00 ms
+Benchmarking epoch_loop/n16_p1200_e120: Collecting 10 samples in estimated 668.49 ms (30 iterations)
+Benchmarking epoch_loop/n16_p1200_e120: Analyzing
+epoch_loop/n16_p1200_e120
+                        time:   [21.114 ms 21.248 ms 21.400 ms]
+                        change: [−1.3694% −0.6132% +0.2459%] (p = 0.18 > 0.05)
+                        No change in performance detected.
+
+Benchmarking phases/crossover/1000
+Benchmarking phases/crossover/1000: Warming up for 200.00 ms
+Benchmarking phases/crossover/1000: Collecting 10 samples in estimated 501.08 ms (1595 iterations)
+Benchmarking phases/crossover/1000: Analyzing
+phases/crossover/1000   time:   [24.836 µs 24.902 µs 24.991 µs]
+                        change: [−5.5895% −4.7128% −4.0200%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Benchmarking phases/mutation/1000
+Benchmarking phases/mutation/1000: Warming up for 200.00 ms
+Benchmarking phases/mutation/1000: Collecting 10 samples in estimated 514.50 ms (1540 iterations)
+Benchmarking phases/mutation/1000: Analyzing
+phases/mutation/1000    time:   [40.645 µs 41.186 µs 41.742 µs]
+                        change: [−8.0721% −4.7128% −1.3631%] (p = 0.02 < 0.05)
+                        Performance has improved.
+Benchmarking phases/local_search/1000
+Benchmarking phases/local_search/1000: Warming up for 200.00 ms
+Benchmarking phases/local_search/1000: Collecting 10 samples in estimated 511.43 ms (1595 iterations)
+Benchmarking phases/local_search/1000: Analyzing
+phases/local_search/1000
+                        time:   [37.549 µs 37.616 µs 37.733 µs]
+                        change: [+2.5233% +2.8655% +3.2889%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking phases/diversity_metrics/1000
+Benchmarking phases/diversity_metrics/1000: Warming up for 200.00 ms
+Benchmarking phases/diversity_metrics/1000: Collecting 10 samples in estimated 510.12 ms (1705 iterations)
+Benchmarking phases/diversity_metrics/1000: Analyzing
+phases/diversity_metrics/1000
+                        time:   [9.5286 µs 9.5833 µs 9.6391 µs]
+                        change: [−0.8137% +0.8378% +2.3573%] (p = 0.35 > 0.05)
+                        No change in performance detected.
+Benchmarking phases/crossover/40000
+Benchmarking phases/crossover/40000: Warming up for 200.00 ms
+
+Warning: Unable to complete 10 samples in 500.0ms. You may wish to increase target time to 522.8ms or enable flat sampling.
+Benchmarking phases/crossover/40000: Collecting 10 samples in estimated 522.81 ms (55 iterations)
+Benchmarking phases/crossover/40000: Analyzing
+phases/crossover/40000  time:   [636.10 µs 646.99 µs 662.87 µs]
+                        change: [−53.549% −52.578% −51.599%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Benchmarking phases/mutation/40000
+Benchmarking phases/mutation/40000: Warming up for 200.00 ms
+Benchmarking phases/mutation/40000: Collecting 10 samples in estimated 982.74 ms (110 iterations)
+Benchmarking phases/mutation/40000: Analyzing
+phases/mutation/40000   time:   [451.80 µs 455.24 µs 458.27 µs]
+                        change: [−2.3644% −0.7272% +1.1259%] (p = 0.46 > 0.05)
+                        No change in performance detected.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+Benchmarking phases/local_search/40000
+Benchmarking phases/local_search/40000: Warming up for 200.00 ms
+
+Warning: Unable to complete 10 samples in 500.0ms. You may wish to increase target time to 544.1ms or enable flat sampling.
+Benchmarking phases/local_search/40000: Collecting 10 samples in estimated 544.09 ms (55 iterations)
+Benchmarking phases/local_search/40000: Analyzing
+phases/local_search/40000
+                        time:   [1.4259 ms 1.4270 ms 1.4286 ms]
+                        change: [+2.1555% +2.4673% +2.7660%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking phases/diversity_metrics/40000
+Benchmarking phases/diversity_metrics/40000: Warming up for 200.00 ms
+Benchmarking phases/diversity_metrics/40000: Collecting 10 samples in estimated 955.43 ms (110 iterations)
+Benchmarking phases/diversity_metrics/40000: Analyzing
+phases/diversity_metrics/40000
+                        time:   [378.35 µs 378.87 µs 379.28 µs]
+                        change: [−0.6538% −0.1518% +0.2280%] (p = 0.59 > 0.05)
+                        No change in performance detected.
+

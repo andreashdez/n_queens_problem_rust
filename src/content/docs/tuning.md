@@ -8,13 +8,13 @@ description: "Choose parameters and run reproducible experiments across multiple
 Run tuning experiments with `cargo run --release`, fixed `--seed` values, and either `--metrics-csv` or the `parameter_sweep` example. Compare configurations across multiple seeds by solve rate first, then median solved epoch and elapsed time.
 
 - Start from the defaults for `--size 18`, then change one family of parameters at a time.
-- Increase `--population` when runs fail because the search converges too early. Larger populations preserve more candidates but increase per-epoch work.
+- Increase `--population` when runs fail because the search converges too early. Larger populations preserve more candidates but cost proportionally more per epoch, and measurements at sizes 8 to 100 found the default of 500 solved as reliably as 40,000 while running far faster. Populations below roughly 250 did start missing seeds on large boards.
 - Increase `--epochs` when best conflicts are still improving near the limit. If the run is flat for many epochs, tune exploration instead of only adding epochs.
 - Adjust `--mutation-rate` in small steps. Lower values preserve good partial solutions; higher values explore more aggressively. The solver already boosts mutation during stagnation, so treat this as the base rate.
 - Adjust `--elite-ratio` to balance preserving winners against premature convergence. Higher values protect good chromosomes; lower values make survivor selection more exploratory.
 - Tune `--offspring-ratio` to control GA turnover. For example, `0.10` creates offspring equal to 10% of the target population before survivor selection. Higher values explore faster but add crossover work.
 - Tune `--min-diversity-ratio` when metrics show duplicate-heavy populations. If diversity drops below the threshold, the solver refreshes non-elite chromosomes with random permutations.
-- Use `--selection tournament` when roulette selection is slow to improve. Larger `--tournament-size` increases selection pressure but can reduce diversity.
+- Tournament selection is the default. Larger `--tournament-size` increases selection pressure but can reduce diversity. Switch to `--selection roulette` for the classic fitness-proportionate behavior; it was measured slower at every board size tried.
 - Use `--local-search-rate` for harder boards when the GA often gets close but does not finish. Start low, such as `0.02` to `0.05`, and increase `--local-search-attempts` only if metrics show useful local-search improvements.
 - Lower population, offspring ratio, local-search rate, or local-search attempts when elapsed time is the limiting factor rather than solve rate.
 

@@ -1,4 +1,10 @@
-use std::{collections::HashSet, error::Error, fmt, time::Instant};
+use std::{
+    collections::HashSet,
+    error::Error,
+    fmt,
+    hash::{BuildHasher, Hasher},
+    time::Instant,
+};
 
 use rand::{Rng, RngExt, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use rayon::prelude::*;
@@ -16,11 +22,30 @@ const MUTATION_STAGNATION_BOOST_SCALE: f32 = 3.0;
 const MAX_ADAPTIVE_MUTATION_RATE: f32 = 0.60;
 const MIN_ADAPTIVE_ELITE_RATIO: f32 = 0.01;
 const MIN_ADAPTIVE_ELITE_RATIO_SCALE: f32 = 0.25;
-pub const DEFAULT_MUTATION_RATE: f32 = 0.08;
+/// Default board size, population, and epoch budget.
+///
+/// These live here rather than in the binary so the CLI and the GUI cannot drift
+/// apart; both read them from this module.
+pub const DEFAULT_BOARD_SIZE: u16 = 18;
+pub const DEFAULT_POPULATION_SIZE: usize = 500;
+pub const DEFAULT_MAX_EPOCHS: u32 = 5_000;
+
+/// A small population with high turnover.
+///
+/// Measured on 2026-09-14 across board sizes 8 to 100: 50 of 50 seeds solved at
+/// every size, matching the previous 40,000/roulette defaults, while running
+/// 32x to 67x faster. See `benchmarks/README.md` for the sweeps behind each
+/// value.
+///
+/// `DEFAULT_MUTATION_RATE` is deliberately not the fastest value measured: the
+/// stagnation boost multiplies it by [`MUTATION_STAGNATION_BOOST_SCALE`] and
+/// clamps at [`MAX_ADAPTIVE_MUTATION_RATE`], so a higher base would saturate
+/// that ceiling and flatten the adaptive response.
+pub const DEFAULT_MUTATION_RATE: f32 = 0.16;
 pub const DEFAULT_ELITE_RATIO: f32 = 0.10;
-pub const DEFAULT_OFFSPRING_RATIO: f32 = 0.10;
+pub const DEFAULT_OFFSPRING_RATIO: f32 = 0.50;
 pub const DEFAULT_MIN_DIVERSITY_RATIO: f32 = 0.10;
-pub const DEFAULT_SELECTION_STRATEGY: SelectionStrategy = SelectionStrategy::Roulette;
+pub const DEFAULT_SELECTION_STRATEGY: SelectionStrategy = SelectionStrategy::Tournament;
 pub const DEFAULT_TOURNAMENT_SIZE: usize = 3;
 pub const DEFAULT_LOCAL_SEARCH_RATE: f32 = 0.0;
 pub const DEFAULT_LOCAL_SEARCH_ATTEMPTS: usize = 8;
@@ -1016,7 +1041,10 @@ impl GeneticAlgorithm {
             self.tournament_size,
         );
 
-        let mut offspring = Vec::with_capacity(offspring_count);
+        // Draw every child's inputs up front, in the order the serial loop used,
+        // so the master RNG stream is unchanged and the build below is pure.
+        let chromosome_size = self.population[0].get_positions().len();
+        let mut plans = Vec::with_capacity(offspring_count);
         for _ in 0..offspring_count {
             let Some(parent_one_index) = self.select_parent_index(roulette_selection.as_ref().map(
                 |(cumulative_fitness, fitness_sum)| (cumulative_fitness.as_slice(), *fitness_sum),
@@ -1028,16 +1056,16 @@ impl GeneticAlgorithm {
             )) else {
                 break;
             };
+            let crossover_points = draw_crossover_points(chromosome_size, &mut self.rng);
 
-            let population = &self.population;
-            let rng = &mut self.rng;
-            let child = mate_chromosomes(
-                population[parent_one_index].get_positions(),
-                population[parent_two_index].get_positions(),
-                rng,
-            );
-            offspring.push(child);
+            plans.push(OffspringPlan {
+                parent_one_index,
+                parent_two_index,
+                crossover_points,
+            });
         }
+
+        let offspring = build_offspring(&self.population, &plans);
         self.population.extend(offspring);
     }
 
@@ -1220,18 +1248,15 @@ impl GeneticAlgorithm {
         );
         select_elites_to_front(&mut self.population, elite_count);
 
-        let mut survivors = self.population.drain(..elite_count).collect::<Vec<_>>();
-
-        while survivors.len() < self.target_population_size {
-            if self.population.is_empty() {
-                break;
-            }
-
-            let random_index = self.rng.random_range(0..self.population.len());
-            survivors.push(self.population.swap_remove(random_index));
+        // Keeping a uniform random subset of the non-elites is the same as dropping
+        // a uniform random subset of them, so cull the surplus in place instead of
+        // moving every survivor into a fresh allocation. Elites hold indices
+        // `0..elite_count` and the loop only draws above that, so `swap_remove`
+        // always backfills from a non-elite tail slot and elitism is preserved.
+        while self.population.len() > self.target_population_size {
+            let random_index = self.rng.random_range(elite_count..self.population.len());
+            self.population.swap_remove(random_index);
         }
-
-        self.population = survivors;
     }
 
     fn refresh_low_diversity_population(
@@ -1365,6 +1390,49 @@ pub fn build_genetic_algorithm(config: GaConfig) -> Result<GeneticAlgorithm, GaC
     ))
 }
 
+/// One child's fully drawn inputs.
+///
+/// Separating the draw from the build lets the master RNG stay a plain serial
+/// sequence while the PMX work, which needs no randomness, runs in parallel.
+#[derive(Debug, Clone, Copy)]
+struct OffspringPlan {
+    parent_one_index: usize,
+    parent_two_index: usize,
+    crossover_points: Option<(usize, usize)>,
+}
+
+/// Smallest batch worth handing to Rayon.
+///
+/// Mating one child is only tens of microseconds of work, so small batches lose
+/// to the split-and-join overhead. Measured crossover cost per epoch at N=18,
+/// parallel against serial: 20 offspring 5.0x slower, 60 2.1x, 100 1.6x, 200
+/// 1.12x, then 400 1.06x faster, 1,000 1.35x, and 4,000 2.1x. Break-even sits
+/// near 350, so this keeps a margin above it.
+const MIN_PARALLEL_OFFSPRING: usize = 512;
+
+/// Builds every planned child. Pure: identical plans give identical offspring,
+/// in the same order, whether or not this runs in parallel.
+fn build_offspring(population: &[Chromosome], plans: &[OffspringPlan]) -> Vec<Chromosome> {
+    let build = |scratch: &mut PmxScratch, plan: &OffspringPlan| {
+        mate_chromosomes(
+            population[plan.parent_one_index].get_positions(),
+            population[plan.parent_two_index].get_positions(),
+            plan.crossover_points,
+            scratch,
+        )
+    };
+
+    if plans.len() < MIN_PARALLEL_OFFSPRING {
+        let mut scratch = PmxScratch::default();
+        return plans.iter().map(|plan| build(&mut scratch, plan)).collect();
+    }
+
+    plans
+        .par_iter()
+        .map_init(PmxScratch::default, build)
+        .collect()
+}
+
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -1379,6 +1447,62 @@ fn offspring_count_for_population(target_population_size: usize, offspring_ratio
     ((target_population_size as f64) * f64::from(offspring_ratio))
         .round()
         .max(1.0) as usize
+}
+
+/// Builds [`FxHasher`] for the per-epoch uniqueness set.
+///
+/// The population is not adversarial, so the default `SipHash` resistance buys
+/// nothing here while dominating the cost of the diversity metric. Uniqueness
+/// stays exact: `HashSet` still compares positions on collision.
+#[derive(Debug, Clone, Copy, Default)]
+struct FxBuildHasher;
+
+impl BuildHasher for FxBuildHasher {
+    type Hasher = FxHasher;
+
+    fn build_hasher(&self) -> FxHasher {
+        FxHasher { hash: 0 }
+    }
+}
+
+/// The `rustc-hash` multiply-xor-rotate hasher, inlined to avoid a dependency.
+struct FxHasher {
+    hash: u64,
+}
+
+impl FxHasher {
+    const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+
+    const fn add(&mut self, word: u64) {
+        self.hash = (self.hash.rotate_left(5) ^ word).wrapping_mul(Self::SEED);
+    }
+}
+
+impl Hasher for FxHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        let (words, remainder) = bytes.as_chunks::<{ size_of::<u64>() }>();
+        for &word in words {
+            self.add(u64::from_ne_bytes(word));
+        }
+
+        if !remainder.is_empty() {
+            let mut word = [0u8; size_of::<u64>()];
+            word[..remainder.len()].copy_from_slice(remainder);
+            self.add(u64::from_ne_bytes(word));
+        }
+    }
+
+    fn write_u16(&mut self, value: u16) {
+        self.add(u64::from(value));
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        self.add(value as u64);
+    }
+
+    fn finish(&self) -> u64 {
+        self.hash
+    }
 }
 
 #[allow(
@@ -1399,7 +1523,7 @@ fn population_metrics(population: &[Chromosome]) -> PopulationMetrics {
     let mut best_conflicts_sum = u32::MAX;
     let mut best_index = None;
     let mut total_conflicts_sum = 0u64;
-    let mut unique_chromosomes = HashSet::with_capacity(population.len());
+    let mut unique_chromosomes = HashSet::with_capacity_and_hasher(population.len(), FxBuildHasher);
 
     for (index, chromosome) in population.iter().enumerate() {
         let conflicts_sum = chromosome.get_conflicts_sum();
@@ -1502,11 +1626,13 @@ fn improve_chromosome_with_local_search(
             index_two += 1;
         }
 
-        chromosome.mutate_swap_at(index_one, index_two);
-        if chromosome.get_conflicts_sum() < current_conflicts_sum {
+        // Score the swap before committing to it. Applying and reverting instead
+        // costs two extra conflict recounts on every rejected attempt, and most
+        // attempts are rejected.
+        let candidate_conflicts_sum = chromosome.conflicts_sum_after_swap(index_one, index_two);
+        if candidate_conflicts_sum < current_conflicts_sum {
+            chromosome.apply_swap_with_conflicts_sum(index_one, index_two, candidate_conflicts_sum);
             improved = true;
-        } else {
-            chromosome.mutate_swap_at(index_one, index_two);
         }
     }
 
@@ -1587,24 +1713,38 @@ fn stagnation_reset_interval(max_epoch_count: u32) -> u32 {
         .clamp(MIN_STAGNATION_RESET_EPOCHS, MAX_STAGNATION_RESET_EPOCHS)
 }
 
-fn mate_chromosomes(parent_one: &[u16], parent_two: &[u16], rng: &mut impl Rng) -> Chromosome {
-    log::trace!("mate chromosomes");
-    log::trace!("parent_one={parent_one:?}");
-    log::trace!("parent_two={parent_two:?}");
-
-    let child_genes = pmx(parent_one, parent_two, rng);
-    let child = Chromosome::new(child_genes);
-
-    log::trace!("child={child:?}");
-    child
+/// Reusable buffers for [`pmx_with_crossover_points`].
+///
+/// Mating a generation runs the same fixed-size bookkeeping thousands of times,
+/// so the loop keeps one of these instead of allocating three vectors per child.
+#[derive(Debug, Default)]
+struct PmxScratch {
+    parent_two_positions: Vec<usize>,
+    child_used: Vec<bool>,
+    child_filled: Vec<bool>,
 }
 
-fn pmx(parent_one: &[u16], parent_two: &[u16], rng: &mut impl Rng) -> Vec<u16> {
-    debug_assert_eq!(parent_one.len(), parent_two.len());
+impl PmxScratch {
+    /// Clears the buffers and sizes them for one chromosome, keeping capacity.
+    fn reset(&mut self, chromosome_size: usize) {
+        self.parent_two_positions.clear();
+        self.parent_two_positions
+            .resize(chromosome_size, usize::MAX);
+        self.child_used.clear();
+        self.child_used.resize(chromosome_size, false);
+        self.child_filled.clear();
+        self.child_filled.resize(chromosome_size, false);
+    }
+}
 
-    let chromosome_size = parent_one.len();
+/// Draws the PMX crossover window, or `None` when the chromosome is too short
+/// to cross and the child is just a copy of the first parent.
+///
+/// Kept separate from the mating itself so the mating loop can consume the
+/// master RNG serially and then build children off-thread.
+fn draw_crossover_points(chromosome_size: usize, rng: &mut impl Rng) -> Option<(usize, usize)> {
     if chromosome_size <= 1 {
-        return parent_one.to_vec();
+        return None;
     }
 
     let chromosome_half_size = chromosome_size / 2;
@@ -1615,7 +1755,36 @@ fn pmx(parent_one: &[u16], parent_two: &[u16], rng: &mut impl Rng) -> Vec<u16> {
         "partially mapped crossover [point_one={point_one}, point_two_exclusive={point_two_exclusive}]"
     );
 
-    pmx_with_crossover_points(parent_one, parent_two, point_one, point_two_exclusive)
+    Some((point_one, point_two_exclusive))
+}
+
+fn mate_chromosomes(
+    parent_one: &[u16],
+    parent_two: &[u16],
+    crossover_points: Option<(usize, usize)>,
+    scratch: &mut PmxScratch,
+) -> Chromosome {
+    log::trace!("mate chromosomes");
+    log::trace!("parent_one={parent_one:?}");
+    log::trace!("parent_two={parent_two:?}");
+
+    // PMX always emits a permutation of the parent rows, so skip revalidating it;
+    // `prop_pmx_preserves_permutation_invariant` and the debug assertion in
+    // `Chromosome::new_unchecked` guard that invariant.
+    let child_genes = match crossover_points {
+        Some((point_one, point_two_exclusive)) => pmx_with_crossover_points(
+            parent_one,
+            parent_two,
+            point_one,
+            point_two_exclusive,
+            scratch,
+        ),
+        None => parent_one.to_vec(),
+    };
+    let child = Chromosome::new_unchecked(child_genes);
+
+    log::trace!("child={child:?}");
+    child
 }
 
 fn pmx_with_crossover_points(
@@ -1623,24 +1792,32 @@ fn pmx_with_crossover_points(
     parent_two: &[u16],
     point_one: usize,
     point_two_exclusive: usize,
+    scratch: &mut PmxScratch,
 ) -> Vec<u16> {
     debug_assert_eq!(parent_one.len(), parent_two.len());
     debug_assert!(point_one < point_two_exclusive);
     debug_assert!(point_two_exclusive <= parent_one.len());
 
     let chromosome_size = parent_one.len();
+    scratch.reset(chromosome_size);
+    let PmxScratch {
+        parent_two_positions,
+        child_used,
+        child_filled,
+    } = scratch;
 
-    let mut parent_two_positions = vec![usize::MAX; chromosome_size];
     for (index, &gene) in parent_two.iter().enumerate() {
         parent_two_positions[usize::from(gene)] = index;
     }
 
-    let mut child_genes = vec![None; parent_one.len()];
-    let mut child_used = vec![false; chromosome_size];
+    // `child_filled` tracks which slots hold a gene, so the child itself stays a
+    // plain `Vec<u16>` and needs no second pass to unwrap it.
+    let mut child_genes = vec![0u16; chromosome_size];
 
     for i in point_one..point_two_exclusive {
         let gene = parent_one[i];
-        child_genes[i] = Some(gene);
+        child_genes[i] = gene;
+        child_filled[i] = true;
         child_used[usize::from(gene)] = true;
     }
 
@@ -1653,8 +1830,9 @@ fn pmx_with_crossover_points(
         .skip(point_one)
     {
         if !child_used[usize::from(gene)] {
-            let position = find_position(i, parent_one, &parent_two_positions, &child_genes);
-            child_genes[position] = Some(gene);
+            let position = find_position(i, parent_one, parent_two_positions, child_filled);
+            child_genes[position] = gene;
+            child_filled[position] = true;
             child_used[usize::from(gene)] = true;
         }
     }
@@ -1662,23 +1840,20 @@ fn pmx_with_crossover_points(
     log::trace!("child positions two: {child_genes:?}");
 
     for i in 0..chromosome_size {
-        if child_genes[i].is_none() {
-            child_genes[i] = Some(parent_two[i]);
+        if !child_filled[i] {
+            child_genes[i] = parent_two[i];
         }
     }
 
     log::trace!("child positions three: {child_genes:?}");
     child_genes
-        .iter()
-        .map(|gene| gene.expect("pmx child should not contain empty genes"))
-        .collect()
 }
 
 fn find_position(
     index: usize,
     parent_one: &[u16],
     parent_two_positions: &[usize],
-    child: &[Option<u16>],
+    child_filled: &[bool],
 ) -> usize {
     let mut current_index = index;
 
@@ -1694,7 +1869,7 @@ fn find_position(
         );
 
         log::trace!("checking position {position}");
-        if child[position].is_none() {
+        if !child_filled[position] {
             return position;
         }
 
@@ -1744,8 +1919,8 @@ mod tests {
         DEFAULT_ELITE_RATIO, DEFAULT_LOCAL_SEARCH_ATTEMPTS, DEFAULT_LOCAL_SEARCH_RATE,
         DEFAULT_MIN_DIVERSITY_RATIO, DEFAULT_MUTATION_RATE, DEFAULT_OFFSPRING_RATIO,
         DEFAULT_SELECTION_STRATEGY, DEFAULT_TOURNAMENT_SIZE, GaConfig, GaConfigError,
-        GeneticAlgorithm, GeneticAlgorithmParams, SelectionStrategy, build_genetic_algorithm,
-        chromosome::Chromosome, pmx,
+        GeneticAlgorithm, GeneticAlgorithmParams, PmxScratch, SelectionStrategy,
+        build_genetic_algorithm, chromosome::Chromosome, draw_crossover_points,
     };
 
     #[test]
@@ -1793,10 +1968,12 @@ mod tests {
                         let second = parents
                             .select_parent_index(Some((&cumulative, total)))
                             .unwrap();
+                        let chromosome_size = parents.population[first].get_positions().len();
                         super::mate_chromosomes(
                             parents.population[first].get_positions(),
                             parents.population[second].get_positions(),
-                            &mut parents.rng,
+                            draw_crossover_points(chromosome_size, &mut parents.rng),
+                            &mut super::PmxScratch::default(),
                         )
                         .get_positions()
                         .to_vec()
@@ -1906,6 +2083,21 @@ mod tests {
                 local_search_attempts: DEFAULT_LOCAL_SEARCH_ATTEMPTS,
             },
         )
+    }
+
+    /// Draws a crossover window and mates one pair, mirroring what the mating
+    /// loop does per child across its serial and parallel halves.
+    fn pmx_child(parent_one: &[u16], parent_two: &[u16], rng: &mut StdRng) -> Vec<u16> {
+        match draw_crossover_points(parent_one.len(), rng) {
+            Some((point_one, point_two_exclusive)) => super::pmx_with_crossover_points(
+                parent_one,
+                parent_two,
+                point_one,
+                point_two_exclusive,
+                &mut PmxScratch::default(),
+            ),
+            None => parent_one.to_vec(),
+        }
     }
 
     fn shuffled_values(size: usize, seed: u64) -> Vec<u16> {
@@ -2345,6 +2537,55 @@ mod tests {
     }
 
     #[test]
+    fn test_survivor_selection_trims_to_target_and_keeps_elites() {
+        let population = (0..20)
+            .map(|seed| Chromosome::new(shuffled_values(8, seed)))
+            .collect::<Vec<_>>();
+        let elite_count = 3;
+        let mut expected_elite_conflicts = population
+            .iter()
+            .map(Chromosome::get_conflicts_sum)
+            .collect::<Vec<_>>();
+        expected_elite_conflicts.sort_unstable();
+        expected_elite_conflicts.truncate(elite_count);
+
+        let mut genetic_algorithm = GeneticAlgorithm::new(
+            population,
+            StdRng::seed_from_u64(7),
+            GeneticAlgorithmParams {
+                target_population_size: 10,
+                max_epoch_count: 10,
+                mutation_rate: DEFAULT_MUTATION_RATE,
+                elite_ratio: 0.3,
+                offspring_ratio: DEFAULT_OFFSPRING_RATIO,
+                min_diversity_ratio: DEFAULT_MIN_DIVERSITY_RATIO,
+                selection_strategy: DEFAULT_SELECTION_STRATEGY,
+                tournament_size: DEFAULT_TOURNAMENT_SIZE,
+                local_search_rate: DEFAULT_LOCAL_SEARCH_RATE,
+                local_search_attempts: DEFAULT_LOCAL_SEARCH_ATTEMPTS,
+            },
+        );
+        genetic_algorithm.select_survivors(0.3);
+
+        assert_eq!(genetic_algorithm.get_population_size(), 10);
+
+        // Comparing the best conflict sums rather than identities keeps the
+        // assertion correct when several chromosomes tie for an elite slot.
+        let mut survivor_conflicts = genetic_algorithm
+            .population
+            .iter()
+            .map(Chromosome::get_conflicts_sum)
+            .collect::<Vec<_>>();
+        survivor_conflicts.sort_unstable();
+        survivor_conflicts.truncate(elite_count);
+        assert_eq!(survivor_conflicts, expected_elite_conflicts);
+
+        // Already at target: trimming again must be a no-op.
+        genetic_algorithm.select_survivors(0.3);
+        assert_eq!(genetic_algorithm.get_population_size(), 10);
+    }
+
+    #[test]
     fn test_tournament_selection_picks_best_when_tournament_covers_population() {
         let solution = vec![0, 4, 7, 5, 2, 6, 1, 3];
         let high_conflict = vec![0, 1, 2, 3, 4, 5, 6, 7];
@@ -2523,7 +2764,7 @@ mod tests {
             parent_one.shuffle(&mut rng);
             parent_two.shuffle(&mut rng);
 
-            let child = pmx(&parent_one, &parent_two, &mut rng);
+            let child = pmx_child(&parent_one, &parent_two, &mut rng);
             let mut child_sorted = child.clone();
             child_sorted.sort_unstable();
 
@@ -2537,7 +2778,13 @@ mod tests {
         let parent_one = vec![0, 1, 2, 3, 4, 5, 6, 7];
         let parent_two = vec![7, 6, 5, 4, 3, 2, 1, 0];
 
-        let child = super::pmx_with_crossover_points(&parent_one, &parent_two, 3, parent_one.len());
+        let child = super::pmx_with_crossover_points(
+            &parent_one,
+            &parent_two,
+            3,
+            parent_one.len(),
+            &mut super::PmxScratch::default(),
+        );
         let mut child_sorted = child.clone();
         child_sorted.sort_unstable();
 
@@ -2562,7 +2809,7 @@ mod tests {
             let parent_two = shuffled_values(size, parent_two_seed);
             let mut crossover_rng = StdRng::seed_from_u64(crossover_seed);
 
-            let child = pmx(&parent_one, &parent_two, &mut crossover_rng);
+            let child = pmx_child(&parent_one, &parent_two, &mut crossover_rng);
 
             prop_assert_eq!(child.len(), size);
 

@@ -21,7 +21,7 @@ Use `cargo run --release --locked -- --help` to see the CLI's current options. A
 | Option | Alias | Default | Purpose |
 | --- | --- | --- | --- |
 | `--size` | `-n` | `18` | Board dimension, from 1 to 65535. |
-| `--population` | `-p` | `40000` | Positive initial and target population size. |
+| `--population` | `-p` | `500` | Positive initial and target population size. |
 | `--epochs` | `-e` | `5000` | Positive maximum number of evolution epochs. |
 | `--seed` | `-s` | Generated | Unsigned 64-bit seed for reproducible runs. |
 | `--allow-unsolvable` | — | Off | Evolve sizes 2 and 3 for experiments instead of stopping at epoch zero. |
@@ -32,11 +32,11 @@ All rates must be finite numbers in `0..=1`. These are base settings; mutation a
 
 | Option | Alias | Default | Purpose |
 | --- | --- | --- | --- |
-| `--mutation-rate` | `-m` | `0.08` | Mutation probability for each non-elite chromosome. |
+| `--mutation-rate` | `-m` | `0.16` | Mutation probability for each non-elite chromosome. |
 | `--elite-ratio` | `-r` | `0.10` | Fraction protected during survivor selection. |
-| `--offspring-ratio` | `-o` | `0.10` | Offspring as a fraction of the target population. |
+| `--offspring-ratio` | `-o` | `0.50` | Offspring as a fraction of the target population. |
 | `--min-diversity-ratio` | — | `0.10` | Minimum unique-board ratio before refreshing non-elites. |
-| `--selection` | — | `roulette` | Parent selection: `roulette` or `tournament`. |
+| `--selection` | — | `tournament` | Parent selection: `roulette` or `tournament`. |
 | `--tournament-size` | — | `3` | Positive candidate count per tournament. |
 | `--local-search-rate` | — | `0` | Fraction of non-elites selected for improving swaps. Zero disables local search. |
 | `--local-search-attempts` | — | `8` | Swap attempts per selected candidate. Zero performs no attempts. |

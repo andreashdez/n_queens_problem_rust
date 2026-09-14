@@ -392,7 +392,10 @@ impl Artifacts {
             "debug_assertions": cfg!(debug_assertions),
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
-            "system": command_output("uname", &["-a"]),
+            // `uname -srvm` is `uname -a` without the nodename, so the committed
+            // metadata records the kernel and machine without the hostname of
+            // whoever ran the sweep.
+            "system": command_output("uname", &["-srvm"]),
             "available_parallelism": std::thread::available_parallelism().ok().map(usize::from),
             "rayon_threads": rayon::current_num_threads(),
             "rustflags": std::env::var("RUSTFLAGS").ok(),
@@ -618,6 +621,16 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(path.join("metadata.json")).unwrap()).unwrap();
         assert!(metadata["rayon_threads"].as_u64().unwrap() > 0);
         assert_eq!(metadata["os"], std::env::consts::OS);
+        // Committed metadata must not carry the hostname of the machine that ran it.
+        if let (Some(system), Some(nodename)) = (
+            metadata["system"].as_str(),
+            command_output("uname", &["-n"]),
+        ) {
+            assert!(
+                !nodename.is_empty() && !system.contains(&nodename),
+                "system metadata leaked the hostname: {system}"
+            );
+        }
         assert!(path.join("source/src/ga.rs").exists());
         assert!(path.join("source/Cargo.lock").exists());
         assert_eq!(

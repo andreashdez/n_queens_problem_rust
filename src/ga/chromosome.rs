@@ -81,7 +81,15 @@ impl Chromosome {
         Ok(Self::new_unchecked(positions))
     }
 
-    fn new_unchecked(positions: Vec<u16>) -> Self {
+    /// Creates a chromosome without revalidating its row permutation.
+    ///
+    /// Callers must supply a permutation of `0..positions.len()`; debug builds
+    /// assert this so an invalid caller still fails loudly under `cargo test`.
+    pub(crate) fn new_unchecked(positions: Vec<u16>) -> Self {
+        debug_assert!(
+            validate_positions(&positions).is_ok(),
+            "new_unchecked requires a valid row permutation"
+        );
         let conflicts_sum = count_conflicts_sum(&positions);
         log::debug!("chromosome conflicts sum: {conflicts_sum}");
         Self {
@@ -107,18 +115,74 @@ impl Chromosome {
     }
 
     pub(crate) fn mutate_swap_at(&mut self, index_one: usize, index_two: usize) {
-        if self.positions.len() < 2 || index_one == index_two {
+        if !self.is_swappable(index_one, index_two) {
             return;
         }
 
-        if index_one >= self.positions.len() || index_two >= self.positions.len() {
-            return;
+        let conflicts_sum = self.conflicts_sum_after_swap(index_one, index_two);
+        self.apply_swap_with_conflicts_sum(index_one, index_two, conflicts_sum);
+    }
+
+    /// Conflict sum this chromosome would have if the two rows were swapped,
+    /// computed without mutating it. Returns the current sum for a no-op swap.
+    ///
+    /// Only the two moved queens change conflict counts, and their conflict with
+    /// each other survives the swap, so the delta is found by recounting just
+    /// those two against the rest of the board.
+    pub(crate) fn conflicts_sum_after_swap(&self, index_one: usize, index_two: usize) -> u32 {
+        if !self.is_swappable(index_one, index_two) {
+            return self.conflicts_sum;
         }
 
         let previous_queen_conflicts =
             count_swapped_queen_conflicts_from_positions(&self.positions, index_one, index_two);
+        let swapped_queen_conflicts = count_swapped_queen_conflicts(
+            &self.positions,
+            index_one,
+            index_two,
+            self.positions[index_two],
+            self.positions[index_one],
+        );
+
+        let updated_conflicts_sum = i64::from(self.conflicts_sum)
+            + i64::from(swapped_queen_conflicts)
+            - i64::from(previous_queen_conflicts);
+
+        u32::try_from(updated_conflicts_sum).expect("conflicts sum should remain non-negative")
+    }
+
+    /// Applies a swap whose resulting conflict sum is already known, skipping the
+    /// recount [`Self::mutate_swap_at`] would repeat.
+    ///
+    /// `conflicts_sum` must come from [`Self::conflicts_sum_after_swap`] for the
+    /// same two indices and an unmodified chromosome.
+    pub(crate) fn apply_swap_with_conflicts_sum(
+        &mut self,
+        index_one: usize,
+        index_two: usize,
+        conflicts_sum: u32,
+    ) {
+        if !self.is_swappable(index_one, index_two) {
+            return;
+        }
+
+        debug_assert_eq!(
+            conflicts_sum,
+            self.conflicts_sum_after_swap(index_one, index_two),
+            "apply_swap_with_conflicts_sum requires a matching precomputed sum"
+        );
+
         self.positions.swap(index_one, index_two);
-        self.recalculate_conflicts_after_swap(index_one, index_two, previous_queen_conflicts);
+        self.conflicts_sum = conflicts_sum;
+        self.conflicts = OnceLock::new();
+        self.fitness = 0.0;
+    }
+
+    const fn is_swappable(&self, index_one: usize, index_two: usize) -> bool {
+        self.positions.len() >= 2
+            && index_one != index_two
+            && index_one < self.positions.len()
+            && index_two < self.positions.len()
     }
 
     pub fn get_positions(&self) -> &[u16] {
@@ -141,24 +205,6 @@ impl Chromosome {
 
     pub const fn set_fitness(&mut self, fitness: f32) {
         self.fitness = fitness;
-    }
-
-    fn recalculate_conflicts_after_swap(
-        &mut self,
-        index_one: usize,
-        index_two: usize,
-        previous_queen_conflicts: u32,
-    ) {
-        let current_queen_conflicts =
-            count_swapped_queen_conflicts_from_positions(&self.positions, index_one, index_two);
-        let updated_conflicts_sum = i64::from(self.conflicts_sum)
-            + i64::from(current_queen_conflicts)
-            - i64::from(previous_queen_conflicts);
-
-        self.conflicts_sum =
-            u32::try_from(updated_conflicts_sum).expect("conflicts sum should remain non-negative");
-        self.conflicts = OnceLock::new();
-        self.fitness = 0.0;
     }
 }
 

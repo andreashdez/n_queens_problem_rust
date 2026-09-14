@@ -11,13 +11,13 @@ cargo run --release
 Run with explicit parameters:
 
 ```bash
-cargo run --release -- --size 18 --population 40000 --epochs 5000 --seed 42 --mutation-rate 0.08 --elite-ratio 0.10 --offspring-ratio 0.10 --selection tournament --tournament-size 3 --local-search-rate 0.05 --local-search-attempts 8
+cargo run --release -- --size 18 --population 500 --epochs 5000 --seed 42 --mutation-rate 0.16 --elite-ratio 0.10 --offspring-ratio 0.50 --selection tournament --tournament-size 3 --local-search-rate 0 --local-search-attempts 8
 ```
 
 Short aliases are also available:
 
 ```bash
-cargo run --release -- -n 18 -p 40000 -e 5000 -s 42 -m 0.08 -r 0.10 -o 0.10
+cargo run --release -- -n 18 -p 500 -e 5000 -s 42 -m 0.16 -r 0.10 -o 0.50
 ```
 
 ## GUI
@@ -45,14 +45,14 @@ Hover over charts for the nearest retained sample's epoch and values. **R** mark
 ## CLI options
 
 - `-n`, `--size <size>`: board size (number of queens, must be greater than 0). Default: `18`.
-- `-p`, `--population <count>`: initial and target population size. Default: `40000`.
+- `-p`, `--population <count>`: initial and target population size. Default: `500`.
 - `-e`, `--epochs <count>`: maximum GA epochs. Default: `5000`.
 - `-s`, `--seed <u64>`: optional deterministic RNG seed.
-- `-m`, `--mutation-rate <0..1>`: probability of mutating each non-elite chromosome. Default: `0.08`.
+- `-m`, `--mutation-rate <0..1>`: probability of mutating each non-elite chromosome. Default: `0.16`.
 - `-r`, `--elite-ratio <0..1>`: fraction of top chromosomes retained before random survivor sampling. Default: `0.10`.
-- `-o`, `--offspring-ratio <0..1>`: fraction of the target population produced as offspring each epoch. Default: `0.10`.
+- `-o`, `--offspring-ratio <0..1>`: fraction of the target population produced as offspring each epoch. Default: `0.50`.
 - `--min-diversity-ratio <0..1>`: minimum unique-chromosome ratio before non-elites are randomly refreshed. Default: `0.10`.
-- `--selection <roulette|tournament>`: parent selection strategy. Default: `roulette`.
+- `--selection <roulette|tournament>`: parent selection strategy. Default: `tournament`.
 - `--tournament-size <count>`: candidate count for tournament selection. Default: `3`.
 - `--local-search-rate <0..1>`: fraction of non-elite chromosomes improved with local search each epoch. Default: `0`.
 - `--local-search-attempts <count>`: random improving swaps attempted per selected chromosome. Default: `8`.
@@ -71,13 +71,13 @@ If `--seed` is omitted, a random seed is generated and logged.
 Run tuning experiments with `cargo run --release`, fixed `--seed` values, and either `--metrics-csv` or the `parameter_sweep` example. Compare configurations across multiple seeds by solve rate first, then median solved epoch and elapsed time.
 
 - Start from the defaults for `--size 18`, then change one family of parameters at a time.
-- Increase `--population` when runs fail because the search converges too early. Larger populations preserve more candidates but increase per-epoch work.
+- Increase `--population` when runs fail because the search converges too early. Larger populations preserve more candidates but cost proportionally more per epoch, and measurements at sizes 8 to 100 found the default of 500 solved as reliably as 40,000 while running far faster. Populations below roughly 250 did start missing seeds on large boards.
 - Increase `--epochs` when best conflicts are still improving near the limit. If the run is flat for many epochs, tune exploration instead of only adding epochs.
 - Adjust `--mutation-rate` in small steps. Lower values preserve good partial solutions; higher values explore more aggressively. The solver already boosts mutation during stagnation, so treat this as the base rate.
 - Adjust `--elite-ratio` to balance preserving winners against premature convergence. Higher values protect good chromosomes; lower values make survivor selection more exploratory.
 - Tune `--offspring-ratio` to control GA turnover. For example, `0.10` creates offspring equal to 10% of the target population before survivor selection. Higher values explore faster but add crossover work.
 - Tune `--min-diversity-ratio` when metrics show duplicate-heavy populations. If diversity drops below the threshold, the solver refreshes non-elite chromosomes with random permutations.
-- Use `--selection tournament` when roulette selection is slow to improve. Larger `--tournament-size` increases selection pressure but can reduce diversity.
+- Tournament selection is the default. Larger `--tournament-size` increases selection pressure but can reduce diversity. Switch to `--selection roulette` for the classic fitness-proportionate behavior; it was measured slower at every board size tried.
 - Use `--local-search-rate` for harder boards when the GA often gets close but does not finish. Start low, such as `0.02` to `0.05`, and increase `--local-search-attempts` only if metrics show useful local-search improvements.
 - Lower population, offspring ratio, local-search rate, or local-search attempts when elapsed time is the limiting factor rather than solve rate.
 
@@ -104,14 +104,14 @@ The directory must not already exist and must be outside `src`, `examples`, `ben
 
 ## Measured N=18 presets
 
-A release-build comparison on macOS/aarch64 with eight Rayon threads used 200 epochs and independent validation seeds 101–120:
+A release-build comparison on macOS/aarch64 with eight Rayon threads, recorded on 2026-09-14, used 200 epochs and independent validation seeds 101–120:
 
 | Preset | Population | Selection | Local-search rate | Solved | Median runtime |
 | --- | ---: | --- | ---: | ---: | ---: |
-| Compact hybrid | 4,000 | Tournament | 0.05 | 20/20 | 41.5 ms |
-| Roulette hybrid | 4,000 | Roulette | 0.05 | 20/20 | 69.0 ms |
-| Pure GA | 40,000 | Tournament | 0 | 20/20 | 259.5 ms |
-| Current default parameters | 40,000 | Roulette | 0 | 20/20 | 373.0 ms |
+| Compact hybrid | 4,000 | Tournament | 0.05 | 20/20 | 35.5 ms |
+| Roulette hybrid | 4,000 | Roulette | 0.05 | 20/20 | 44.0 ms |
+| Pure GA | 40,000 | Tournament | 0 | 20/20 | 101.5 ms |
+| Current default parameters | 40,000 | Roulette | 0 | 20/20 | 195.5 ms |
 
 All other GA parameters use their defaults. These measurements support trying the compact hybrid for N=18; they do not guarantee success or generalize to other board sizes. The default population and 5,000-epoch budget remain unchanged. The GUI includes a **Recommended · 18×18** preset.
 

@@ -57,9 +57,10 @@ struct GuiConfig {
 impl Default for GuiConfig {
     fn default() -> Self {
         Self {
-            board_size: 18,
-            population_size: 40_000,
-            max_epochs: 5_000,
+            board_size: ga::DEFAULT_BOARD_SIZE,
+            population_size: u32::try_from(ga::DEFAULT_POPULATION_SIZE)
+                .expect("default population fits u32"),
+            max_epochs: ga::DEFAULT_MAX_EPOCHS,
             seed: 42,
             mutation_rate: ga::DEFAULT_MUTATION_RATE,
             elite_ratio: ga::DEFAULT_ELITE_RATIO,
@@ -107,12 +108,27 @@ impl GuiConfig {
         .validated()
     }
 
-    fn use_measured_values(&mut self) {
+    /// The local-search hybrid, useful when a board stalls near a solution.
+    fn use_hybrid_values(&mut self) {
         *self = Self {
             population_size: 4_000,
-            max_epochs: 200,
             selection_strategy: SelectionStrategy::Tournament,
             local_search_rate: 0.05,
+            seed: self.seed,
+            ..Self::default()
+        };
+    }
+
+    /// The pre-2026-09-14 defaults: a large population with roulette selection
+    /// and no local search. Spelled out rather than derived from the current
+    /// defaults so this stays the classic configuration as those defaults move.
+    fn use_classic_values(&mut self) {
+        *self = Self {
+            population_size: 40_000,
+            mutation_rate: 0.08,
+            offspring_ratio: 0.10,
+            selection_strategy: SelectionStrategy::Roulette,
+            local_search_rate: 0.0,
             seed: self.seed,
             ..Self::default()
         };
@@ -135,18 +151,20 @@ impl GuiConfig {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GuiPreset {
     Demo,
-    Measured,
     Default,
+    Hybrid,
+    Classic,
 }
 
 impl GuiPreset {
-    const ALL: [Self; 3] = [Self::Demo, Self::Measured, Self::Default];
+    const ALL: [Self; 4] = [Self::Demo, Self::Default, Self::Hybrid, Self::Classic];
 
     const fn label(self) -> &'static str {
         match self {
             Self::Demo => "Quick demo · 8×8",
-            Self::Measured => "Recommended · 18×18",
-            Self::Default => "Classic genetic algorithm · 18×18",
+            Self::Default => "Recommended defaults · 18×18",
+            Self::Hybrid => "Local-search hybrid · 18×18",
+            Self::Classic => "Classic genetic algorithm · 18×18",
         }
     }
 
@@ -157,7 +175,8 @@ impl GuiPreset {
         };
         match self {
             Self::Demo => config.use_fast_demo_values(),
-            Self::Measured => config.use_measured_values(),
+            Self::Hybrid => config.use_hybrid_values(),
+            Self::Classic => config.use_classic_values(),
             Self::Default => {}
         }
         config
@@ -1690,10 +1709,28 @@ mod tests {
             custom.population_size += 1;
             assert!(GuiPreset::matching(&custom).is_none());
         }
-        let compact = GuiPreset::Measured.config(42);
-        assert_eq!(compact.population_size, 4_000);
-        assert_eq!(compact.max_epochs, 200);
-        assert_eq!(compact.local_search_rate, 0.05);
+        let hybrid = GuiPreset::Hybrid.config(42);
+        assert_eq!(hybrid.population_size, 4_000);
+        assert_eq!(hybrid.local_search_rate, 0.05);
+        assert_eq!(hybrid.selection_strategy, SelectionStrategy::Tournament);
+
+        // The classic preset must keep the pre-2026-09-14 behavior even as the
+        // shipped defaults change, so it is checked against literals.
+        let classic = GuiPreset::Classic.config(42);
+        assert_eq!(classic.population_size, 40_000);
+        assert_eq!(classic.mutation_rate, 0.08);
+        assert_eq!(classic.offspring_ratio, 0.10);
+        assert_eq!(classic.selection_strategy, SelectionStrategy::Roulette);
+        assert_eq!(classic.local_search_rate, 0.0);
+
+        // The plain default preset must track the shipped defaults.
+        let default = GuiPreset::Default.config(42);
+        assert_eq!(
+            usize::try_from(default.population_size).unwrap(),
+            ga::DEFAULT_POPULATION_SIZE
+        );
+        assert_eq!(default.selection_strategy, ga::DEFAULT_SELECTION_STRATEGY);
+        assert_eq!(default.mutation_rate, ga::DEFAULT_MUTATION_RATE);
     }
 
     #[test]

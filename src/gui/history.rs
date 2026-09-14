@@ -459,7 +459,7 @@ mod tests {
 
     #[test]
     fn saved_rerun_uses_original_configuration_and_preserves_history() {
-        let original = GuiPreset::Measured.config(987);
+        let original = GuiPreset::Hybrid.config(987);
         let result = finished(original.clone());
         let mut app = test_app();
         let id = app.archive.record(result);
@@ -489,7 +489,7 @@ mod tests {
 
     #[test]
     fn command_contains_every_setting_without_changing_saved_values() {
-        let mut config = GuiPreset::Measured.config(u64::MAX);
+        let mut config = GuiPreset::Hybrid.config(u64::MAX);
         config.allow_unsolvable = true;
         config.local_search_attempts = 17;
         let command = config.cli_command();
