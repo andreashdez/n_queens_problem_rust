@@ -190,10 +190,10 @@ npm run build
 
 ## GitHub Wiki sync
 
-`src/content/docs/index.md` is synced to GitHub Wiki `Home.md` by `.github/workflows/wiki-sync.yml`.
+`.github/workflows/wiki-sync.yml` regenerates the GitHub Wiki `Home.md` from the page titles and descriptions in `website/content/docs/`.
 
 - Enable Wiki in the repository settings (`Settings -> General -> Features -> Wikis`).
-- Push changes to `src/content/docs/index.md` on `main` or run the workflow manually.
+- Push changes under `website/content/docs/` on `main` or run the workflow manually.
 
 ## Development checks
 

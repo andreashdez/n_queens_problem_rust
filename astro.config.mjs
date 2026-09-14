@@ -34,10 +34,12 @@ const base = configuredBase
 export default defineConfig({
   site: configuredSite ?? "http://localhost:4321",
   base,
+  // The docs site lives outside `src/`, which holds the Rust crate.
+  srcDir: "./website",
   integrations: [
     starlight({
       title: "N-Queens in Rust",
-      customCss: ["./src/styles/docs.css"],
+      customCss: ["./website/styles/docs.css"],
       social: [
         {
           icon: "github",

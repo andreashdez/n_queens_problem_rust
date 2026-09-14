@@ -34,7 +34,7 @@ npm run check:examples
 
 When changing CLI defaults or examples, update the reference and expected output in the same change. When adding a guide, update the sidebar and `scripts/wiki-home.py` navigation list. CI builds and checks both the site root and a repository subpath, and the Pages workflow checks links again before uploading.
 
-For local editing, `npm run dev` starts the documentation server. Edit pages in `src/content/docs/`, the sidebar in `astro.config.mjs`, and the theme in `src/styles/docs.css`.
+For local editing, `npm run dev` starts the documentation server. The site lives in `website/`, kept separate from the Rust crate in `src/`: edit pages in `website/content/docs/`, the sidebar in `astro.config.mjs`, and the theme in `website/styles/docs.css`.
 
 GitHub Actions builds the site with the repository's Pages origin and base path. Pushes to `main` that change documentation or site assets trigger deployment. The GitHub Wiki Home links to the published guides; the Pages site is the full documentation.
 

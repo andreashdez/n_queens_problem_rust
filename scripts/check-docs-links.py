@@ -87,7 +87,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("build_dir", nargs="?", type=Path, default=Path("dist"))
     args = parser.parse_args()
-    legacy = Path("src/components/LegacyDocsLinks.astro")
+    legacy = Path("website/components/LegacyDocsLinks.astro")
     errors, checked = check_site(args.build_dir, legacy if legacy.exists() else None)
     if errors:
         raise SystemExit("\n".join(errors))

@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DOCS = ROOT / "src/content/docs"
+DOCS = ROOT / "website/content/docs"
 
 
 def run(command):

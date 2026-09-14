@@ -30,7 +30,7 @@ lines = [
     "",
 ]
 for slug in pages:
-    source = (root / "src/content/docs" / f"{slug}.md").read_text(encoding="utf-8")
+    source = (root / "website/content/docs" / f"{slug}.md").read_text(encoding="utf-8")
     # Page metadata uses JSON-quoted YAML scalars to keep this generator dependency-free.
     title = json.loads(re.search(r"^title: (.+)$", source, re.MULTILINE)[1])
     description = json.loads(re.search(r"^description: (.+)$", source, re.MULTILINE)[1])

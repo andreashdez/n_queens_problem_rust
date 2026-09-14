@@ -4,7 +4,7 @@ on:
   push:
     branches: ["main"]
     paths:
-      - "src/content/docs/**"
+      - "website/content/docs/**"
       - "scripts/wiki-home.py"
       - ".github/workflows/wiki-sync.yml"
   workflow_dispatch:
