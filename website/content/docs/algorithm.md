@@ -37,7 +37,7 @@ The initial population is recorded as **epoch zero**. The best board found so fa
 
 Stagnation counts epochs without improving the best conflict score. As it increases, the solver adjusts mutation and elite rates to encourage exploration. At the restart threshold, a **soft restart** preserves a small elite group and replenishes the population before continuing evolution.
 
-A diversity refresh and a soft restart are different events. **R** markers in GUI charts identify actual soft-restart epochs.
+A diversity refresh and a soft restart are different events. Dashed **Soft restart** lines in GUI charts identify actual soft-restart epochs.
 
 ## Reading the metrics
 

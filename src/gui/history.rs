@@ -6,8 +6,10 @@ use std::{
 };
 
 use super::{
-    ATTACKER_COLOR, Arc, BoardView, ChartMarker, ChartSeries, Color32, GuiConfig, NQueensApp,
-    RunResult, SELECTED_QUEEN_COLOR, VecDeque, draw_chart, egui, format_ms, plot_value,
+    ATTACKER_COLOR, Arc, BoardView, Color32, GuiConfig, NQueensApp, RunResult,
+    SELECTED_QUEEN_COLOR, VecDeque,
+    charts::{Chart, ChartMarker, ChartScale, ChartSeries, plot_value},
+    egui, format_ms,
 };
 
 const MAX_SAVED_RUNS: usize = 10;
@@ -308,7 +310,7 @@ impl NQueensApp {
         }
     }
 
-    pub(super) fn draw_comparison(&self, ui: &mut egui::Ui) {
+    pub(super) fn draw_comparison(&mut self, ui: &mut egui::Ui) {
         let [Some(a), Some(b)] = self.archive.compare else {
             if !self.archive.runs.is_empty() {
                 ui.weak("Choose A and B in run history to compare convergence.");
@@ -321,7 +323,10 @@ impl NQueensApp {
         ui.separator();
         ui.heading("Run comparison");
         ui.label(comparison_context(&a.result.config, &b.result.config));
-        ui.weak("Best conflicts by epoch · sampled points · R markers indicate restarts");
+        ui.horizontal_wrapped(|ui| {
+            ui.weak("Best conflicts by epoch · sampled points · dashed lines mark restarts");
+            ui.checkbox(&mut self.log_conflicts, "Log conflict scale");
+        });
         let colors = [SELECTED_QUEEN_COLOR, ATTACKER_COLOR];
         let series: Vec<_> = [a, b]
             .iter()
@@ -353,7 +358,13 @@ impl NQueensApp {
                     })
             })
             .collect();
-        draw_chart(ui, "Convergence", &series, &markers, 200.0);
+        Chart {
+            title: "Convergence",
+            height: 220.0,
+            scale: ChartScale::conflicts(self.log_conflicts),
+            link: None,
+        }
+        .show(ui, (a.id, b.id), &series, &markers);
     }
 
     pub(super) fn draw_export_window(&mut self, ctx: &egui::Context) {
@@ -363,7 +374,7 @@ impl NQueensApp {
         let mut open = true;
         let mut saved = false;
         egui::Window::new(format!("Export metrics · Run #{}", dialog.run_id))
-            .id(egui::Id::new("export_run_metrics"))
+            .id(egui::Id::unique("export_run_metrics"))
             .open(&mut open)
             .resizable(true)
             .show(ctx, |ui| {
@@ -400,9 +411,7 @@ impl NQueensApp {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{
-        Duration, GuiPreset, MAX_CHART_POINTS, MetricHistory, Vec2, WorkerMessage, spawn_solver,
-    };
+    use super::super::{Duration, GuiPreset, MAX_CHART_POINTS, Vec2, WorkerMessage, spawn_solver};
     use super::*;
 
     fn finished(config: GuiConfig) -> Arc<RunResult> {
@@ -413,23 +422,6 @@ mod tests {
                 WorkerMessage::Snapshot(_) => {}
                 WorkerMessage::Failed(error) => panic!("{error}"),
             }
-        }
-    }
-
-    fn test_app() -> NQueensApp {
-        NQueensApp {
-            config: GuiConfig::default(),
-            running: None,
-            cancel_requested: false,
-            history: MetricHistory::default(),
-            latest_snapshot: None,
-            selected_queen: None,
-            result: None,
-            archive: RunArchive::default(),
-            export: None,
-            notice: None,
-            board_view: BoardView::default(),
-            error: None,
         }
     }
 
@@ -461,7 +453,7 @@ mod tests {
     fn saved_rerun_uses_original_configuration_and_preserves_history() {
         let original = GuiPreset::Hybrid.config(987);
         let result = finished(original.clone());
-        let mut app = test_app();
+        let mut app = NQueensApp::default();
         let id = app.archive.record(result);
         app.config.seed = 1;
         app.archive.viewed = Some(id);
@@ -580,7 +572,7 @@ mod tests {
             population_size: 1,
             ..Default::default()
         });
-        let mut app = test_app();
+        let mut app = NQueensApp::default();
         let a = app.archive.record(Arc::clone(&result));
         let b = app.archive.record(result);
         app.archive.compare = [Some(a), Some(b)];

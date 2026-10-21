@@ -1,6 +1,5 @@
 use std::{
     collections::VecDeque,
-    fmt::Write as _,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -15,6 +14,7 @@ use rand::RngExt;
 
 use crate::ga::{self, EpochSnapshot, GaConfig, RunMetrics, SelectionStrategy};
 
+mod charts;
 mod history;
 use history::{ExportDialog, RunArchive};
 
@@ -192,6 +192,7 @@ impl GuiPreset {
 struct RunningRun {
     receiver: Receiver<WorkerMessage>,
     cancel: Arc<AtomicBool>,
+    max_epochs: u32,
 }
 
 enum WorkerMessage {
@@ -208,18 +209,6 @@ struct RunResult {
     best_conflicts: Vec<u32>,
     best_conflicts_sum: u32,
     population_size: usize,
-}
-
-struct ChartMarker {
-    epoch: u32,
-    label: String,
-    color: Color32,
-}
-
-struct ChartSeries {
-    label: String,
-    color: Color32,
-    values: Vec<(u32, f32)>,
 }
 
 const MAX_CHART_POINTS: usize = 1024;
@@ -288,26 +277,15 @@ struct NQueensApp {
     notice: Option<String>,
     board_view: BoardView,
     error: Option<String>,
+    log_conflicts: bool,
+    /// Bumped per started run so live charts drop the previous run's zoom.
+    chart_generation: u64,
 }
 
 impl NQueensApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
-
-        Self {
-            config: GuiConfig::default(),
-            running: None,
-            cancel_requested: false,
-            history: MetricHistory::default(),
-            latest_snapshot: None,
-            selected_queen: None,
-            result: None,
-            archive: RunArchive::default(),
-            export: None,
-            notice: None,
-            board_view: BoardView::default(),
-            error: None,
-        }
+        Self::default()
     }
 
     fn start_run(&mut self, ctx: &egui::Context) {
@@ -324,9 +302,14 @@ impl NQueensApp {
         self.result = None;
         self.error = None;
         self.cancel_requested = false;
+        self.chart_generation += 1;
 
         let (receiver, cancel) = spawn_solver(self.config.clone());
-        self.running = Some(RunningRun { receiver, cancel });
+        self.running = Some(RunningRun {
+            receiver,
+            cancel,
+            max_epochs: self.config.max_epochs,
+        });
         ctx.request_repaint();
     }
 
@@ -431,33 +414,7 @@ impl NQueensApp {
                     ui.end_row();
                 });
         });
-        ui.add_space(12.0);
-        if is_running {
-            if ui
-                .add_enabled(
-                    !self.cancel_requested,
-                    egui::Button::new(if self.cancel_requested {
-                        "Cancelling…"
-                    } else {
-                        "Cancel run"
-                    })
-                    .min_size(Vec2::new(ui.available_width(), 36.0)),
-                )
-                .clicked()
-            {
-                self.cancel_run();
-            }
-        } else if ui
-            .add(
-                egui::Button::new(RichText::new("Run solver").strong())
-                    .fill(Color32::from_rgb(36, 91, 122))
-                    .min_size(Vec2::new(ui.available_width(), 36.0)),
-            )
-            .clicked()
-        {
-            self.start_run(ctx);
-        }
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         ui.weak(format!(
             "{} individuals · up to {} epochs",
             self.config.population_size, self.config.max_epochs
@@ -466,7 +423,7 @@ impl NQueensApp {
         egui::CollapsingHeader::new("Advanced settings")
             .default_open(false)
             .show(ui, |ui| {
-                // Recompute because the Run button can start a worker in this frame.
+                // Recompute because the top bar can start a worker in this frame.
                 ui.add_enabled_ui(self.running.is_none(), |ui| self.draw_advanced_controls(ui));
             });
         ui.separator();
@@ -578,15 +535,8 @@ impl NQueensApp {
             .strong(),
         );
 
-        if self.archive.viewed.is_none()
-            && let Some(error) = &self.error
-        {
-            ui.colored_label(Color32::from_rgb(255, 120, 120), error);
-            return;
-        }
-
         let Some((metrics, best_conflicts_sum)) = self.current_metrics() else {
-            ui.label("No run yet.");
+            ui.label("No metrics yet.");
             return;
         };
 
@@ -614,21 +564,6 @@ impl NQueensApp {
 
         if let Some(result) = self.display_result() {
             ui.add_space(6.0);
-            if result.metrics.stop_reason() == ga::StopReason::Cancelled {
-                ui.colored_label(Color32::from_rgb(245, 190, 95), "Run cancelled");
-            } else if let Some(epoch) = result.metrics.solved_epoch() {
-                ui.colored_label(
-                    Color32::from_rgb(105, 220, 145),
-                    format!("Solved at epoch {epoch}"),
-                );
-            } else {
-                let message = if result.metrics.stop_reason() == ga::StopReason::Unsolvable {
-                    "This board size has no solution"
-                } else {
-                    "Epoch limit reached"
-                };
-                ui.colored_label(Color32::from_rgb(245, 190, 95), message);
-            }
             ui.label(format!("Final population: {}", result.population_size));
             ui.label(format!(
                 "Total elapsed: {}",
@@ -638,12 +573,6 @@ impl NQueensApp {
     }
 
     fn draw_main_panel(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.heading("Board");
-            ui.label(self.status_text());
-        });
-        ui.add_space(8.0);
-
         let mut selected_queen = self.selected_queen;
         let mut board_view = self.board_view;
         let board = self.current_board();
@@ -658,6 +587,7 @@ impl NQueensApp {
                     &mut board_view,
                 );
             } else {
+                ui.heading("Board");
                 draw_empty_board(ui);
             }
         });
@@ -670,7 +600,12 @@ impl NQueensApp {
             .viewed
             .and_then(|id| self.archive.get(id))
             .map_or(&self.history, |run| &run.result.history);
-        draw_charts(ui, history);
+        charts::draw_metric_charts(
+            ui,
+            history,
+            (self.archive.viewed, self.chart_generation),
+            &mut self.log_conflicts,
+        );
         self.draw_comparison(ui);
     }
 
@@ -700,56 +635,81 @@ impl NQueensApp {
         })
     }
 
-    fn status_text(&self) -> String {
+    /// Top-bar status, colored by outcome.
+    fn status(&self) -> (String, Option<Color32>) {
         if let Some(run) = self.archive.viewed.and_then(|id| self.archive.get(id)) {
-            return format!(
-                "Run #{} · {} · {} best conflicts",
-                run.id,
-                run.result.metrics.stop_reason(),
-                run.result.best_conflicts_sum
-            );
+            let (outcome, color) = run_outcome(&run.result);
+            return (format!("Run #{} · {outcome}", run.id), Some(color));
         }
         if self.cancel_requested {
-            return "Cancelling after current epoch".to_owned();
+            return ("Cancelling after current epoch".to_owned(), None);
         }
-
         if self.running.is_some() {
-            return self.latest_snapshot.as_ref().map_or_else(
+            let text = self.latest_snapshot.as_ref().map_or_else(
                 || "Starting solver".to_owned(),
-                |snapshot| {
-                    format!(
-                        "Running epoch {} with {} best conflicts",
-                        snapshot.metrics().epoch(),
-                        snapshot.best_conflicts_sum()
-                    )
-                },
+                |snapshot| format!("{} best conflicts so far", snapshot.best_conflicts_sum()),
             );
+            return (text, None);
         }
-
         if let Some(error) = &self.error {
-            return format!("Error: {error}");
+            return (format!("Error: {error}"), Some(ERROR_COLOR));
         }
+        self.display_result()
+            .map_or(("Ready".to_owned(), None), |result| {
+                let (outcome, color) = run_outcome(result);
+                (outcome, Some(color))
+            })
+    }
 
-        if let Some(result) = self.display_result() {
-            if result.metrics.stop_reason() == ga::StopReason::Cancelled {
-                return format!(
-                    "Cancelled with {} best conflicts",
-                    result.best_conflicts_sum
+    /// The one place for run actions, live progress, and the outcome.
+    fn draw_top_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.horizontal_wrapped(|ui| {
+            if let Some(max_epochs) = self.running.as_ref().map(|running| running.max_epochs) {
+                if ui
+                    .add_enabled(
+                        !self.cancel_requested,
+                        egui::Button::new(if self.cancel_requested {
+                            "Cancelling…"
+                        } else {
+                            "Cancel run"
+                        })
+                        .min_size(RUN_BUTTON_SIZE),
+                    )
+                    .clicked()
+                {
+                    self.cancel_run();
+                }
+                let (fraction, text) = run_progress(
+                    self.latest_snapshot.as_ref().map(EpochSnapshot::metrics),
+                    max_epochs,
                 );
+                ui.add(
+                    egui::ProgressBar::new(fraction)
+                        .text(text)
+                        .desired_width(260.0),
+                )
+                .on_hover_text(
+                    "Share of the epoch budget used; a solution can stop the run early.",
+                );
+            } else if ui
+                .add(
+                    egui::Button::new(RichText::new("Run solver").strong())
+                        .fill(Color32::from_rgb(36, 91, 122))
+                        .min_size(RUN_BUTTON_SIZE),
+                )
+                .on_hover_text("Start a run with the settings on the left")
+                .clicked()
+            {
+                self.start_run(ctx);
             }
-            if let Some(epoch) = result.metrics.solved_epoch() {
-                return format!("Solved at epoch {epoch}");
-            }
-            if result.metrics.stop_reason() == ga::StopReason::Unsolvable {
-                return "This board size has no solution".to_owned();
-            }
-            return format!(
-                "Epoch limit reached with {} best conflicts",
-                result.best_conflicts_sum
-            );
-        }
-
-        "Ready".to_owned()
+            ui.separator();
+            let (text, color) = self.status();
+            let text = RichText::new(text);
+            ui.label(match color {
+                Some(color) => text.color(color),
+                None => text,
+            });
+        });
     }
 
     fn current_metrics(&self) -> Option<(&ga::EpochMetrics, u32)> {
@@ -764,6 +724,27 @@ impl NQueensApp {
         self.latest_snapshot
             .as_ref()
             .map(|snapshot| (snapshot.metrics(), snapshot.best_conflicts_sum()))
+    }
+}
+
+impl Default for NQueensApp {
+    fn default() -> Self {
+        Self {
+            config: GuiConfig::default(),
+            running: None,
+            cancel_requested: false,
+            history: MetricHistory::default(),
+            latest_snapshot: None,
+            selected_queen: None,
+            result: None,
+            archive: RunArchive::default(),
+            export: None,
+            notice: None,
+            board_view: BoardView::default(),
+            error: None,
+            log_conflicts: true,
+            chart_generation: 0,
+        }
     }
 }
 
@@ -784,11 +765,9 @@ impl eframe::App for NQueensApp {
         let ctx = ui.ctx().clone();
 
         egui::Panel::top("top_bar").show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("N-Queens Genetic Solver").strong().size(18.0));
-                ui.separator();
-                ui.label(self.status_text());
-            });
+            ui.add_space(4.0);
+            self.draw_top_bar(ui, &ctx);
+            ui.add_space(4.0);
         });
 
         egui::Panel::left("controls")
@@ -871,6 +850,55 @@ fn spawn_solver(config: GuiConfig) -> (Receiver<WorkerMessage>, Arc<AtomicBool>)
     });
 
     (receiver, cancel)
+}
+
+const SUCCESS_COLOR: Color32 = Color32::from_rgb(105, 220, 145);
+const WARNING_COLOR: Color32 = Color32::from_rgb(245, 190, 95);
+const ERROR_COLOR: Color32 = Color32::from_rgb(255, 120, 120);
+const RUN_BUTTON_SIZE: Vec2 = Vec2::new(120.0, 28.0);
+
+fn run_outcome(result: &RunResult) -> (String, Color32) {
+    let best = result.best_conflicts_sum;
+    let stop_reason = result.metrics.stop_reason();
+    if stop_reason == ga::StopReason::Cancelled {
+        return (
+            format!("Cancelled with {best} best conflicts"),
+            WARNING_COLOR,
+        );
+    }
+    if let Some(epoch) = result.metrics.solved_epoch() {
+        return (format!("Solved at epoch {epoch}"), SUCCESS_COLOR);
+    }
+    if stop_reason == ga::StopReason::Unsolvable {
+        return ("This board size has no solution".to_owned(), WARNING_COLOR);
+    }
+    (
+        format!("Epoch limit reached with {best} best conflicts"),
+        WARNING_COLOR,
+    )
+}
+
+/// Share of the epoch budget used, and a label with the epoch rate once time has passed.
+fn run_progress(metrics: Option<&ga::EpochMetrics>, max_epochs: u32) -> (f32, String) {
+    let Some(metrics) = metrics else {
+        return (0.0, "Starting…".to_owned());
+    };
+    let epoch = metrics.epoch();
+    let fraction =
+        (charts::plot_value(epoch) / charts::plot_value(max_epochs.max(1))).clamp(0.0, 1.0);
+    let mut text = format!("Epoch {epoch} of {max_epochs}");
+    if let Some(ms) = u32::try_from(metrics.elapsed_ms())
+        .ok()
+        .filter(|&ms| ms > 0)
+    {
+        let rate = f64::from(epoch) * 1_000.0 / f64::from(ms);
+        if rate >= 100.0 {
+            text += &format!(" · {rate:.0} epochs/s");
+        } else {
+            text += &format!(" · {rate:.1} epochs/s");
+        }
+    }
+    (fraction, text)
 }
 
 fn metric_row(ui: &mut egui::Ui, label: &str, value: String) {
@@ -960,14 +988,6 @@ impl BoardView {
 // A board dimension and its coordinate indices fit the solver's u16 range.
 fn board_units(value: usize) -> f32 {
     f32::from(u16::try_from(value).expect("board coordinate fits u16"))
-}
-
-#[allow(
-    clippy::cast_precision_loss,
-    reason = "Chart coordinates are approximate f32 pixels; stored epochs and metrics retain their integer precision."
-)]
-const fn plot_value(value: u32) -> f32 {
-    value as f32
 }
 
 #[allow(
@@ -1074,20 +1094,37 @@ fn draw_board(
     } else {
         "attacking pairs"
     };
-    ui.label(format!("{size} queens · {conflicts_sum} {conflict_label}"));
-    ui.weak("Click a queen to inspect its conflicts. Click it again or an empty square to clear.");
     ui.horizontal_wrapped(|ui| {
-        if ui.button("−").on_hover_text("Zoom out").clicked() {
+        ui.heading("Board");
+        ui.label(format!("{size} queens · {conflicts_sum} {conflict_label}"));
+        if ui
+            .add_enabled(view.zoom > 1.0, egui::Button::new("−"))
+            .on_hover_text("Zoom out")
+            .clicked()
+        {
             view.set_zoom(view.zoom / 1.5, Vec2::splat(0.5));
         }
-        if ui.button("+").on_hover_text("Zoom in").clicked() {
+        if ui
+            .add_enabled(view.zoom < 1024.0, egui::Button::new("+"))
+            .on_hover_text("Zoom in")
+            .clicked()
+        {
             view.set_zoom(view.zoom * 1.5, Vec2::splat(0.5));
         }
         ui.label(format!("{:.0}%", view.zoom * 100.0));
-        if ui.button("Fit board").clicked() {
+        if ui.button("Fit").on_hover_text("Fit the whole board").clicked() {
             *view = BoardView::default();
         }
-        ui.weak("Drag to pan · Ctrl/⌘ + scroll or pinch to zoom");
+        ui.menu_button("Help", |ui| {
+            ui.set_max_width(300.0);
+            ui.label("Click a queen to inspect its conflicts. Click it again or an empty square to clear.");
+            ui.label("Press Escape while the board is focused to clear the selection.");
+            ui.separator();
+            ui.label("Drag to pan · Ctrl/⌘ + scroll or pinch to zoom.");
+            ui.label("Fit resets the zoom and pan to show the whole board.");
+            ui.separator();
+            ui.label("Coordinates are 1-based: columns left to right, rows top to bottom.");
+        });
     });
     let gutter = 28.0;
     let board_side = (ui.available_width() - gutter).clamp(1.0, 620.0);
@@ -1273,8 +1310,6 @@ fn draw_board(
             };
             ui.label(format!("Attacked by {} queen{}: {coordinates}{more}. Highlighted lines show their shared diagonals.", attackers.len(), if attackers.len() == 1 { "" } else { "s" }));
         }
-    } else {
-        ui.weak("Coordinates are 1-based: columns left to right, rows top to bottom.");
     }
 }
 
@@ -1337,283 +1372,6 @@ const fn queen_color(conflicts: u32) -> Color32 {
     }
 }
 
-fn draw_charts(ui: &mut egui::Ui, history: &MetricHistory) {
-    let snapshots = &history.points;
-    let markers: Vec<_> = history
-        .restart_epochs
-        .iter()
-        .map(|&epoch| ChartMarker {
-            epoch,
-            label: "Soft restart".into(),
-            color: Color32::from_rgb(245, 190, 85),
-        })
-        .collect();
-    if snapshots.is_empty() {
-        ui.label("Charts appear after the first epoch snapshot.");
-        return;
-    }
-    ui.weak("Hover for retained sample values · R markers indicate soft restarts");
-    if let Some(latest) = snapshots.last()
-        && latest.restart_count() as usize > markers.len()
-    {
-        ui.weak(format!(
-            "Showing {} of {} restart locations",
-            markers.len(),
-            latest.restart_count()
-        ));
-    }
-
-    let conflicts = vec![
-        ChartSeries {
-            label: "Best conflicts".into(),
-            color: Color32::from_rgb(95, 220, 140),
-            values: snapshots
-                .iter()
-                .map(|snapshot| (snapshot.epoch(), plot_value(snapshot.best_conflicts_sum())))
-                .collect(),
-        },
-        ChartSeries {
-            label: "Average conflicts".into(),
-            color: Color32::from_rgb(110, 190, 255),
-            values: snapshots
-                .iter()
-                .map(|snapshot| (snapshot.epoch(), snapshot.average_conflicts_sum()))
-                .collect(),
-        },
-    ];
-    draw_chart(ui, "Conflict history", &conflicts, &markers, 170.0);
-
-    let rates = vec![
-        ChartSeries {
-            label: "Diversity ratio".into(),
-            color: Color32::from_rgb(245, 210, 95),
-            values: snapshots
-                .iter()
-                .map(|snapshot| (snapshot.epoch(), snapshot.diversity_ratio()))
-                .collect(),
-        },
-        ChartSeries {
-            label: "Mutation rate".into(),
-            color: Color32::from_rgb(245, 120, 170),
-            values: snapshots
-                .iter()
-                .map(|snapshot| (snapshot.epoch(), snapshot.mutation_rate()))
-                .collect(),
-        },
-        ChartSeries {
-            label: "Elite ratio".into(),
-            color: Color32::from_rgb(160, 135, 255),
-            values: snapshots
-                .iter()
-                .map(|snapshot| (snapshot.epoch(), snapshot.elite_ratio()))
-                .collect(),
-        },
-    ];
-    draw_chart(ui, "Population ratios", &rates, &markers, 150.0);
-}
-
-fn draw_chart(
-    ui: &mut egui::Ui,
-    title: &str,
-    series: &[ChartSeries],
-    markers: &[ChartMarker],
-    height: f32,
-) {
-    ui.add_space(4.0);
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(title).strong());
-        for line in series {
-            ui.colored_label(line.color, &line.label);
-        }
-    });
-
-    let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::hover());
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(
-        rect,
-        egui::CornerRadius::ZERO,
-        Color32::from_rgb(16, 22, 31),
-    );
-
-    let plot_rect = rect.shrink2(Vec2::new(42.0, 22.0));
-    if plot_rect.width() <= 0.0 || plot_rect.height() <= 0.0 {
-        return;
-    }
-    let max_epoch = series
-        .iter()
-        .flat_map(|line| line.values.iter().map(|(epoch, _)| *epoch))
-        .max()
-        .unwrap_or(1)
-        .max(1);
-    let max_value = series
-        .iter()
-        .flat_map(|line| line.values.iter().map(|(_, value)| *value))
-        .fold(0.0_f32, f32::max)
-        .max(1.0);
-
-    draw_chart_grid(&painter, plot_rect, max_epoch, max_value);
-
-    for marker in markers {
-        let x =
-            plot_rect.left() + plot_rect.width() * plot_value(marker.epoch) / plot_value(max_epoch);
-        painter.line_segment(
-            [
-                Pos2::new(x, plot_rect.top()),
-                Pos2::new(x, plot_rect.bottom()),
-            ],
-            Stroke::new(1.0, marker.color.gamma_multiply(0.5)),
-        );
-        painter.text(
-            Pos2::new(x, plot_rect.top()),
-            Align2::CENTER_TOP,
-            "R",
-            FontId::monospace(10.0),
-            marker.color,
-        );
-    }
-    for line in series {
-        draw_chart_series(&painter, plot_rect, max_epoch, max_value, line);
-    }
-    if let Some(pointer) = response
-        .hover_pos()
-        .filter(|point| plot_rect.contains(*point))
-    {
-        let epoch =
-            f64::from((pointer.x - plot_rect.left()) / plot_rect.width()) * f64::from(max_epoch);
-        painter.line_segment(
-            [
-                Pos2::new(pointer.x, plot_rect.top()),
-                Pos2::new(pointer.x, plot_rect.bottom()),
-            ],
-            Stroke::new(1.0, Color32::WHITE.gamma_multiply(0.4)),
-        );
-        let mut tooltip = String::from("Nearest retained samples (no extrapolation)");
-        for line in series {
-            if let Some((sample_epoch, value)) = nearest_chart_sample(&line.values, epoch) {
-                write!(
-                    tooltip,
-                    "\n{} · epoch {}: {:.3}",
-                    line.label, sample_epoch, value
-                )
-                .expect("writing to a String cannot fail");
-                painter.circle_filled(
-                    Pos2::new(
-                        plot_rect.left()
-                            + plot_rect.width() * plot_value(sample_epoch) / plot_value(max_epoch),
-                        plot_rect
-                            .height()
-                            .mul_add(-(value / max_value).clamp(0.0, 1.0), plot_rect.bottom()),
-                    ),
-                    4.0,
-                    line.color,
-                );
-            }
-        }
-        let tolerance = f64::from(max_epoch) * 8.0 / f64::from(plot_rect.width());
-        for marker in markers
-            .iter()
-            .filter(|marker| (f64::from(marker.epoch) - epoch).abs() <= tolerance)
-            .take(6)
-        {
-            write!(tooltip, "\n{} at epoch {}", marker.label, marker.epoch)
-                .expect("writing to a String cannot fail");
-        }
-        response.on_hover_text(tooltip);
-    }
-}
-
-fn nearest_chart_sample(values: &[(u32, f32)], epoch: f64) -> Option<(u32, f32)> {
-    if !epoch.is_finite()
-        || epoch < f64::from(values.first()?.0)
-        || epoch > f64::from(values.last()?.0)
-    {
-        return None;
-    }
-    let right = values.partition_point(|&(sample, _)| f64::from(sample) < epoch);
-    match (
-        right.checked_sub(1).and_then(|left| values.get(left)),
-        values.get(right),
-    ) {
-        (Some(&a), Some(&b)) => Some(if epoch - f64::from(a.0) <= f64::from(b.0) - epoch {
-            a
-        } else {
-            b
-        }),
-        (Some(&a), None) => Some(a),
-        (None, Some(&b)) => Some(b),
-        (None, None) => None,
-    }
-}
-
-fn draw_chart_grid(painter: &egui::Painter, rect: Rect, max_epoch: u32, max_value: f32) {
-    let grid_stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(180, 205, 220, 32));
-    let text_color = Color32::from_rgb(150, 165, 180);
-
-    for index in 0_u16..=4 {
-        let t = f32::from(index) / 4.0;
-        let y = rect.height().mul_add(-t, rect.bottom());
-        painter.line_segment(
-            [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
-            grid_stroke,
-        );
-        painter.text(
-            Pos2::new(rect.left() - 6.0, y),
-            Align2::RIGHT_CENTER,
-            format!("{:.1}", max_value * t),
-            FontId::monospace(11.0),
-            text_color,
-        );
-    }
-
-    let steps = u16::try_from(max_epoch.min(4)).expect("at most four chart intervals");
-    for index in 0..=steps {
-        let t = f32::from(index) / f32::from(steps);
-        let x = rect.width().mul_add(t, rect.left());
-        painter.line_segment(
-            [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-            grid_stroke,
-        );
-        painter.text(
-            Pos2::new(x, rect.bottom() + 6.0),
-            Align2::CENTER_TOP,
-            ((u64::from(max_epoch) * u64::from(index) + u64::from(steps) / 2) / u64::from(steps))
-                .to_string(),
-            FontId::monospace(11.0),
-            text_color,
-        );
-    }
-}
-
-fn draw_chart_series(
-    painter: &egui::Painter,
-    rect: Rect,
-    max_epoch: u32,
-    max_value: f32,
-    series: &ChartSeries,
-) {
-    let to_pos = |epoch: u32, value: f32| {
-        let x = rect
-            .width()
-            .mul_add(plot_value(epoch) / plot_value(max_epoch), rect.left());
-        let y = rect
-            .height()
-            .mul_add(-(value / max_value).clamp(0.0, 1.0), rect.bottom());
-        Pos2::new(x, y)
-    };
-    let stroke = Stroke::new(2.0, series.color);
-
-    if let Some(&(epoch, value)) = series.values.first() {
-        painter.circle_filled(to_pos(epoch, value), 2.5, series.color);
-    }
-
-    for pair in series.values.windows(2) {
-        let start = to_pos(pair[0].0, pair[0].1);
-        let end = to_pos(pair[1].0, pair[1].1);
-        painter.line_segment([start, end], stroke);
-    }
-}
-
 #[cfg(test)]
 #[allow(
     clippy::float_cmp,
@@ -1666,19 +1424,6 @@ mod tests {
         assert_eq!(range, 990..1030);
         assert_eq!(visible_cells(500.0, 10.0, 0.0, 400.0, 100), 0..0);
         assert_eq!(visible_cells(0.0, 10.0, 0.0, 1000.0, 4), 0..4);
-    }
-
-    #[test]
-    fn chart_hover_uses_nearest_sample_and_never_extrapolates() {
-        let points = [(0, 10.0), (10, 5.0), (20, 0.0)];
-        assert_eq!(nearest_chart_sample(&points, 6.0), Some((10, 5.0)));
-        assert_eq!(nearest_chart_sample(&points, 5.0), Some((0, 10.0)));
-        assert_eq!(nearest_chart_sample(&points, 20.0), Some((20, 0.0)));
-        assert_eq!(nearest_chart_sample(&points, 21.0), None);
-        assert_eq!(nearest_chart_sample(&points, -1.0), None);
-        assert_eq!(nearest_chart_sample(&points, f64::NAN), None);
-        assert_eq!(nearest_chart_sample(&[], 0.0), None);
-        assert_eq!(nearest_chart_sample(&[(0, 1.0)], 0.0), Some((0, 1.0)));
     }
 
     #[test]
@@ -1840,23 +1585,12 @@ mod tests {
     fn disconnected_worker_clears_running_state() {
         let (sender, receiver) = mpsc::sync_channel(1);
         drop(sender);
-        let mut app = NQueensApp {
-            config: GuiConfig::default(),
-            running: Some(RunningRun {
-                receiver,
-                cancel: Arc::new(AtomicBool::new(false)),
-            }),
-            cancel_requested: false,
-            history: MetricHistory::default(),
-            latest_snapshot: None,
-            selected_queen: None,
-            result: None,
-            archive: RunArchive::default(),
-            export: None,
-            notice: None,
-            board_view: BoardView::default(),
-            error: None,
-        };
+        let mut app = NQueensApp::default();
+        app.running = Some(RunningRun {
+            receiver,
+            cancel: Arc::new(AtomicBool::new(false)),
+            max_epochs: 1,
+        });
         app.drain_worker_messages(&egui::Context::default());
         assert!(app.running.is_none());
         assert!(app.error.as_ref().unwrap().contains("disconnected"));
@@ -1881,6 +1615,85 @@ mod tests {
             }
             _ => panic!("expected terminal result"),
         }
+    }
+
+    fn finished_run(config: GuiConfig) -> Arc<RunResult> {
+        let (receiver, _) = spawn_solver(config);
+        loop {
+            match receiver.recv_timeout(Duration::from_secs(10)).unwrap() {
+                WorkerMessage::Finished(result) => return result,
+                WorkerMessage::Snapshot(_) => {}
+                WorkerMessage::Failed(error) => panic!("{error}"),
+            }
+        }
+    }
+
+    #[test]
+    fn progress_reports_budget_share_and_clamps() {
+        assert_eq!(run_progress(None, 10), (0.0, "Starting…".to_owned()));
+        let result = finished_run(GuiConfig {
+            board_size: 3,
+            population_size: 4,
+            max_epochs: 50,
+            allow_unsolvable: true,
+            ..Default::default()
+        });
+        let last = result.metrics.epochs().last().unwrap();
+        assert_eq!(last.epoch(), 50);
+        let (fraction, text) = run_progress(Some(last), 200);
+        assert_eq!(fraction, 0.25);
+        assert!(text.starts_with("Epoch 50 of 200"), "{text}");
+        assert_eq!(text.contains("epochs/s"), last.elapsed_ms() > 0);
+        assert_eq!(run_progress(Some(last), 10).0, 1.0);
+        assert_eq!(run_progress(Some(last), 0).0, 1.0);
+    }
+
+    #[test]
+    fn status_appears_once_and_is_colored_by_outcome() {
+        let solved = finished_run(GuiConfig {
+            board_size: 1,
+            population_size: 1,
+            ..Default::default()
+        });
+        assert_eq!(
+            run_outcome(&solved),
+            ("Solved at epoch 0".to_owned(), SUCCESS_COLOR)
+        );
+        let unsolvable = finished_run(GuiConfig {
+            board_size: 3,
+            population_size: 4,
+            ..Default::default()
+        });
+        assert_eq!(
+            run_outcome(&unsolvable),
+            ("This board size has no solution".to_owned(), WARNING_COLOR)
+        );
+        let limited = finished_run(GuiConfig {
+            board_size: 3,
+            population_size: 4,
+            max_epochs: 5,
+            allow_unsolvable: true,
+            ..Default::default()
+        });
+        assert!(
+            run_outcome(&limited)
+                .0
+                .starts_with("Epoch limit reached with")
+        );
+
+        let mut app = NQueensApp::default();
+        assert_eq!(app.status(), ("Ready".to_owned(), None));
+        app.error = Some("boom".into());
+        assert_eq!(app.status(), ("Error: boom".to_owned(), Some(ERROR_COLOR)));
+        let id = app.archive.record(solved);
+        app.archive.viewed = Some(id);
+        assert_eq!(
+            app.status(),
+            (
+                format!("Run #{id} · Solved at epoch 0"),
+                Some(SUCCESS_COLOR)
+            )
+        );
     }
 
     #[test]

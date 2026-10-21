@@ -19,7 +19,9 @@ The native GUI runs the solver in the background while you inspect the best boar
 
 1. Choose a preset at the top of the controls.
 2. Set the board size and seed.
-3. Click **Run solver** and watch the status and charts.
+3. Click **Run solver** in the top bar and watch the board and charts.
+
+While a run is going, the top bar shows a progress bar with the current epoch, the epoch budget, and epochs per second; a solution can end the run before the bar fills. **Cancel run** stops after the current epoch. When the run ends, the status next to the button reports the outcome: green when solved, amber when cancelled, out of epochs, or unsolvable.
 
 **Advanced settings** contains population/epoch budgets, mutation, parent selection, diversity, and local-search tuning. Hover over a setting for an explanation. Presets preserve the seed and reset all tuning parameters; manual changes are shown as **Custom settings**.
 
@@ -27,7 +29,7 @@ The native GUI runs the solver in the background while you inspect the best boar
 
 Click a queen to inspect its conflicts: the selected queen gets a white ring, attacking queens get square outlines, and their shared diagonals are highlighted. Coordinates and hover details identify each queen; a text explanation lists the attackers. Click the same queen, an empty square, or **Clear selection** to clear it. Selection follows the chosen column as the best board changes during a run, and resets on a new run. Coordinate labels are sampled on large boards to stay readable.
 
-Use **+** / **−**, Ctrl/⌘ + scroll, or pinch to zoom into the board, then drag to pan. **Fit board** resets the view. Zoom is anchored at the pointer for scroll/pinch gestures and supports up to 1,024× magnification; drawing and hit-testing follow the visible board region.
+The compact board toolbar shows the queen and attacking-pair counts alongside the zoom controls. Use **+** / **−**, Ctrl/⌘ + scroll, or pinch to zoom into the board, then drag to pan. **Fit** resets the view, and **Help** opens the selection, navigation, and coordinate instructions. Zoom is anchored at the pointer for scroll/pinch gestures and supports up to 1,024× magnification; drawing and hit-testing follow the visible board region.
 
 ## Compare and repeat runs
 
@@ -37,7 +39,11 @@ Use **+** / **−**, Ctrl/⌘ + scroll, or pinch to zoom into the board, then dr
 
 Best conflicts tracks the best board found so far. Average conflicts describes the whole current population, so it may rise after a restart even while the best score stays unchanged. [See an annotated example](../algorithm/#an-example-of-a-stalled-run).
 
-Hover over charts for the nearest retained sample's epoch and values. **R** markers show actual soft-restart epochs. Each completed run keeps at most 1,024 metric samples, including the first and final epoch, plus the latest 1,024 restart locations. Live updates can skip intermediate events; completed history is collected in the worker independently of GUI refreshes.
+Hover over charts for the nearest retained sample's epoch and values. Dashed **Soft restart** lines show actual soft-restart epochs. Conflict charts use a log scale by default so small best scores stay readable next to the population average; untick **Log conflict scale** for a linear axis. Population ratios use a fixed 0–100% axis.
+
+Drag a chart to pan along the epochs, zoom with Ctrl/Cmd + scroll or a pinch, and double-click to reset. The conflict and population-ratio charts share their epoch range. Click a legend entry to hide or show that series.
+
+Each completed run keeps at most 1,024 metric samples, including the first and final epoch, plus the latest 1,024 restart locations. Live updates can skip intermediate events; completed history is collected in the worker independently of GUI refreshes.
 
 ## Export a run
 
