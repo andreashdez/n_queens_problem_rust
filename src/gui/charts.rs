@@ -8,7 +8,9 @@ use egui_plot::{
     PlotMemory, VLine,
 };
 
-use super::{Color32, MetricHistory, RichText, egui};
+use eframe::egui::{self, Color32, RichText};
+
+use super::{palette::Palette, worker::MetricHistory};
 
 pub(super) struct ChartMarker {
     pub epoch: u32,
@@ -33,6 +35,9 @@ const Y_TICK_POINTS: f64 = 32.0;
 /// Wide enough for "100%" so linked charts line up.
 const Y_AXIS_WIDTH: f32 = 44.0;
 /// A restart counts as hovered within this many points of the pointer.
+const MIN_PLOT_HEIGHT: f32 = 100.0;
+/// The `add_space` and strong title label drawn above each plot.
+const CHART_TITLE_HEIGHT: f32 = 4.0 + 18.0;
 const MARKER_HOVER_POINTS: f64 = 8.0;
 
 #[allow(
@@ -322,12 +327,21 @@ fn hover_text(
 }
 
 /// Conflict and population-ratio charts for one run, sharing an epoch axis.
+/// Plot height that lets `charts` stacked charts fill the rest of `ui`.
+pub(super) fn plot_height(ui: &egui::Ui, charts: u8) -> f32 {
+    let charts = f32::from(charts);
+    // Each chart adds a title row and spacing above its plot.
+    let chrome = CHART_TITLE_HEIGHT + 2.0 * ui.spacing().item_spacing.y;
+    ((ui.available_height() - charts * chrome) / charts).max(MIN_PLOT_HEIGHT)
+}
+
 pub(super) fn draw_metric_charts(
     ui: &mut egui::Ui,
     history: &MetricHistory,
     key: impl Hash + Debug + Copy,
-    log_conflicts: &mut bool,
+    log_conflicts: bool,
 ) {
+    let palette = Palette::of(ui.ctx());
     let snapshots = &history.points;
     let markers: Vec<_> = history
         .restart_epochs
@@ -335,18 +349,13 @@ pub(super) fn draw_metric_charts(
         .map(|&epoch| ChartMarker {
             epoch,
             label: "Soft restart".into(),
-            color: Color32::from_rgb(245, 190, 85),
+            color: palette.restart(),
         })
         .collect();
     if snapshots.is_empty() {
         ui.label("Charts appear after the first epoch snapshot.");
         return;
     }
-    ui.horizontal_wrapped(|ui| {
-        ui.weak("Drag to pan · Ctrl/Cmd + scroll to zoom · double-click to reset · click legend entries to hide them");
-        ui.checkbox(log_conflicts, "Log conflict scale")
-            .on_hover_text("Spread out small conflict counts so the best score stays visible next to the population average.");
-    });
     if let Some(latest) = snapshots.last()
         && latest.restart_count() as usize > markers.len()
     {
@@ -357,19 +366,20 @@ pub(super) fn draw_metric_charts(
         ));
     }
 
+    let height = plot_height(ui, 2);
     let link = Some(ui.make_persistent_id(("metric_charts", key)));
     let conflicts = [
         ChartSeries {
-            label: "Best conflicts".into(),
-            color: Color32::from_rgb(95, 220, 140),
+            label: "Best board".into(),
+            color: palette.best_conflicts(),
             values: snapshots
                 .iter()
                 .map(|snapshot| (snapshot.epoch(), plot_value(snapshot.best_conflicts_sum())))
                 .collect(),
         },
         ChartSeries {
-            label: "Average conflicts".into(),
-            color: Color32::from_rgb(110, 190, 255),
+            label: "Population average".into(),
+            color: palette.average_conflicts,
             values: snapshots
                 .iter()
                 .map(|snapshot| (snapshot.epoch(), snapshot.average_conflicts_sum()))
@@ -377,9 +387,9 @@ pub(super) fn draw_metric_charts(
         },
     ];
     Chart {
-        title: "Conflict history",
-        height: 190.0,
-        scale: ChartScale::conflicts(*log_conflicts),
+        title: "Attacking pairs",
+        height,
+        scale: ChartScale::conflicts(log_conflicts),
         link,
     }
     .show(ui, key, &conflicts, &markers);
@@ -387,7 +397,7 @@ pub(super) fn draw_metric_charts(
     let rates = [
         ChartSeries {
             label: "Diversity".into(),
-            color: Color32::from_rgb(245, 210, 95),
+            color: palette.diversity,
             values: snapshots
                 .iter()
                 .map(|snapshot| (snapshot.epoch(), snapshot.diversity_ratio()))
@@ -395,7 +405,7 @@ pub(super) fn draw_metric_charts(
         },
         ChartSeries {
             label: "Mutation rate".into(),
-            color: Color32::from_rgb(245, 120, 170),
+            color: palette.mutation_rate,
             values: snapshots
                 .iter()
                 .map(|snapshot| (snapshot.epoch(), snapshot.mutation_rate()))
@@ -403,7 +413,7 @@ pub(super) fn draw_metric_charts(
         },
         ChartSeries {
             label: "Elite fraction".into(),
-            color: Color32::from_rgb(160, 135, 255),
+            color: palette.elite_fraction,
             values: snapshots
                 .iter()
                 .map(|snapshot| (snapshot.epoch(), snapshot.elite_ratio()))
@@ -412,7 +422,7 @@ pub(super) fn draw_metric_charts(
     ];
     Chart {
         title: "Population ratios",
-        height: 170.0,
+        height,
         scale: ChartScale::Percent,
         link,
     }

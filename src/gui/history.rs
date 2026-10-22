@@ -1,15 +1,14 @@
-use std::{
-    fmt::Write as _,
-    fs::OpenOptions,
-    io::{self, Write},
-    path::Path,
-};
+use std::{collections::VecDeque, fmt::Write as _, fs, io, path::Path, sync::Arc};
+
+use eframe::egui;
 
 use super::{
-    ATTACKER_COLOR, Arc, BoardView, Color32, GuiConfig, NQueensApp, RunResult,
-    SELECTED_QUEEN_COLOR, VecDeque,
-    charts::{Chart, ChartMarker, ChartScale, ChartSeries, plot_value},
-    egui, format_ms,
+    BoardView, ChartView, NQueensApp, attacking_pairs,
+    charts::{Chart, ChartMarker, ChartScale, ChartSeries, plot_height, plot_value},
+    config::GuiConfig,
+    format_ms,
+    palette::Palette,
+    worker::RunResult,
 };
 
 const MAX_SAVED_RUNS: usize = 10;
@@ -49,6 +48,10 @@ impl RunArchive {
         self.next_id
     }
 
+    pub fn len(&self) -> usize {
+        self.runs.len()
+    }
+
     pub fn get(&self, id: u64) -> Option<&SavedRun> {
         self.runs.iter().find(|run| run.id == id)
     }
@@ -68,38 +71,6 @@ impl RunArchive {
     }
 }
 
-pub(super) struct ExportDialog {
-    run_id: u64,
-    path: String,
-    error: Option<String>,
-}
-
-impl GuiConfig {
-    /// All tokens are typed numbers or fixed enum values, so no shell quoting is needed.
-    fn cli_command(&self) -> String {
-        format!(
-            "cargo run --release --locked -- --size {} --population {} --epochs {} --seed {} --mutation-rate {} --elite-ratio {} --offspring-ratio {} --min-diversity-ratio {} --selection {} --tournament-size {} --local-search-rate {} --local-search-attempts {}{}",
-            self.board_size,
-            self.population_size,
-            self.max_epochs,
-            self.seed,
-            self.mutation_rate,
-            self.elite_ratio,
-            self.offspring_ratio,
-            self.min_diversity_ratio,
-            self.selection_strategy,
-            self.tournament_size,
-            self.local_search_rate,
-            self.local_search_attempts,
-            if self.allow_unsolvable {
-                " --allow-unsolvable"
-            } else {
-                ""
-            }
-        )
-    }
-}
-
 fn comparison_context(a: &GuiConfig, b: &GuiConfig) -> String {
     let seed = if a.seed == b.seed {
         format!("Same seed ({})", a.seed)
@@ -113,7 +84,7 @@ fn comparison_context(a: &GuiConfig, b: &GuiConfig) -> String {
         )
     } else {
         format!(
-            "{seed} · Different board sizes ({} and {}): raw conflict counts are not directly comparable.",
+            "{seed} · Different board sizes ({} and {}): attacking-pair counts are not directly comparable.",
             a.board_size, b.board_size
         )
     }
@@ -188,15 +159,35 @@ impl SavedRun {
     }
 
     fn export_csv(&self, path: &Path) -> io::Result<()> {
-        let csv = self.csv();
-        // Deliberately refuse to overwrite an existing file.
-        let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
-        file.write_all(csv.as_bytes())?;
-        file.flush()
+        // The native save dialog has already confirmed replacing an existing file.
+        fs::write(path, self.csv())
     }
 }
 
 impl NQueensApp {
+    /// Asks for a destination with the native save dialog, then writes the CSV.
+    fn export_run(&mut self, id: u64, ctx: &egui::Context) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(format!("Export metrics · Run #{id}"))
+            .set_file_name(format!("n-queens-run-{id}.csv"))
+            .add_filter("CSV", &["csv"])
+            .save_file()
+        else {
+            return;
+        };
+        let Some(run) = self.archive.get(id) else {
+            return;
+        };
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.display().to_string(),
+        );
+        match run.export_csv(&path) {
+            Ok(()) => self.notify(ctx, format!("Exported run #{id} to {name}"), false),
+            Err(error) => self.notify(ctx, format!("Could not export run #{id}: {error}"), true),
+        }
+    }
+
     fn rerun_saved(&mut self, id: u64, ctx: &egui::Context) -> bool {
         if self.running.is_some() {
             return false;
@@ -209,8 +200,15 @@ impl NQueensApp {
         true
     }
 
+    /// Completing an A/B pair brings the comparison chart into view.
+    fn toggle_comparison(&mut self, slot: usize, id: u64) {
+        self.archive.toggle_comparison(slot, id);
+        if self.archive.compare.iter().all(Option::is_some) {
+            self.chart_view = ChartView::Comparison;
+        }
+    }
+
     pub(super) fn draw_run_history(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.separator();
         ui.heading("Run history");
         ui.weak("Last 10 completed runs · this session only");
         if self.archive.runs.is_empty() {
@@ -237,6 +235,7 @@ impl NQueensApp {
                         self.archive.viewed = Some(run.id);
                         self.selected_queen = None;
                         self.board_view = BoardView::default();
+                        self.chart_view = ChartView::Metrics;
                     }
                     ui.label(result.metrics.stop_reason().to_string());
                     for (slot, name) in [(0, "A"), (1, "B")] {
@@ -245,16 +244,16 @@ impl NQueensApp {
                             .on_hover_text(format!("Select comparison {name}"))
                             .clicked()
                         {
-                            self.archive.toggle_comparison(slot, run.id);
+                            self.toggle_comparison(slot, run.id);
                         }
                     }
                 });
                 ui.label(format!(
-                    "{}×{} · seed {} · {} conflicts · {}",
+                    "{}×{} · seed {} · {} · {}",
                     result.config.board_size,
                     result.config.board_size,
                     result.config.seed,
-                    result.best_conflicts_sum,
+                    attacking_pairs(result.best_conflicts_sum),
                     format_ms(result.metrics.total_elapsed_ms())
                 ));
                 ui.collapsing("Settings", |ui| {
@@ -292,42 +291,35 @@ impl NQueensApp {
                         .clicked()
                     {
                         ctx.copy_text(result.config.cli_command());
-                        self.notice = Some(format!("Copied command for run #{}", run.id));
+                        self.notify(ctx, format!("Copied command for run #{}", run.id), false);
                     }
-                    if ui.button("Export metrics").clicked() {
-                        self.export = Some(ExportDialog {
-                            run_id: run.id,
-                            path: format!("n-queens-run-{}.csv", run.id),
-                            error: None,
-                        });
+                    if ui
+                        .button("Export metrics")
+                        .on_hover_text("Save this run's retained metrics as CSV")
+                        .clicked()
+                    {
+                        self.export_run(run.id, ctx);
                     }
                 });
                 ui.separator();
             });
         }
-        if let Some(notice) = &self.notice {
-            ui.label(notice);
-        }
     }
 
     pub(super) fn draw_comparison(&mut self, ui: &mut egui::Ui) {
-        let [Some(a), Some(b)] = self.archive.compare else {
-            if !self.archive.runs.is_empty() {
-                ui.weak("Choose A and B in run history to compare convergence.");
-            }
+        let pair = self
+            .archive
+            .compare
+            .map(|id| id.and_then(|id| self.archive.get(id)));
+        let [Some(a), Some(b)] = pair else {
+            ui.label("Mark one run A and another B in run history to compare their convergence.");
             return;
         };
-        let (Some(a), Some(b)) = (self.archive.get(a), self.archive.get(b)) else {
-            return;
-        };
-        ui.separator();
-        ui.heading("Run comparison");
         ui.label(comparison_context(&a.result.config, &b.result.config));
-        ui.horizontal_wrapped(|ui| {
-            ui.weak("Best conflicts by epoch · sampled points · dashed lines mark restarts");
-            ui.checkbox(&mut self.log_conflicts, "Log conflict scale");
-        });
-        let colors = [SELECTED_QUEEN_COLOR, ATTACKER_COLOR];
+        ui.weak(
+            "Best-board attacking pairs by epoch · sampled points · dashed lines mark restarts",
+        );
+        let colors = Palette::of(ui.ctx()).compare();
         let series: Vec<_> = [a, b]
             .iter()
             .enumerate()
@@ -360,70 +352,23 @@ impl NQueensApp {
             .collect();
         Chart {
             title: "Convergence",
-            height: 220.0,
+            height: plot_height(ui, 1),
             scale: ChartScale::conflicts(self.log_conflicts),
             link: None,
         }
         .show(ui, (a.id, b.id), &series, &markers);
     }
-
-    pub(super) fn draw_export_window(&mut self, ctx: &egui::Context) {
-        let Some(mut dialog) = self.export.take() else {
-            return;
-        };
-        let mut open = true;
-        let mut saved = false;
-        egui::Window::new(format!("Export metrics · Run #{}", dialog.run_id))
-            .id(egui::Id::unique("export_run_metrics"))
-            .open(&mut open)
-            .resizable(true)
-            .show(ctx, |ui| {
-                ui.label("Export retained metric samples and restart events as CSV.");
-                ui.weak("History may be downsampled. Existing files are never overwritten.");
-                ui.label("File path (relative to the launch directory, or absolute)");
-                ui.text_edit_singleline(&mut dialog.path);
-                if let Some(error) = &dialog.error {
-                    ui.colored_label(Color32::LIGHT_RED, error);
-                }
-                if ui.button("Save CSV").clicked() {
-                    match self.archive.get(dialog.run_id) {
-                        None => {
-                            dialog.error = Some("This run has left the ten-run history.".into());
-                        }
-                        Some(run) => match run.export_csv(Path::new(dialog.path.trim())) {
-                            Ok(()) => {
-                                self.notice = Some(format!(
-                                    "Exported run #{} to {}",
-                                    dialog.run_id, dialog.path
-                                ));
-                                saved = true;
-                            }
-                            Err(error) => dialog.error = Some(format!("Could not export: {error}")),
-                        },
-                    }
-                }
-            });
-        if open && !saved {
-            self.export = Some(dialog);
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::{Duration, GuiPreset, MAX_CHART_POINTS, Vec2, WorkerMessage, spawn_solver};
-    use super::*;
+    use eframe::egui::Vec2;
 
-    fn finished(config: GuiConfig) -> Arc<RunResult> {
-        let (receiver, _) = spawn_solver(config);
-        loop {
-            match receiver.recv_timeout(Duration::from_secs(10)).unwrap() {
-                WorkerMessage::Finished(result) => return result,
-                WorkerMessage::Snapshot(_) => {}
-                WorkerMessage::Failed(error) => panic!("{error}"),
-            }
-        }
-    }
+    use super::*;
+    use crate::gui::{
+        config::GuiPreset,
+        worker::{MAX_CHART_POINTS, tests::finished_run as finished},
+    };
 
     #[test]
     fn archive_evicts_oldest_and_clears_only_stale_selections() {
@@ -480,36 +425,6 @@ mod tests {
     }
 
     #[test]
-    fn command_contains_every_setting_without_changing_saved_values() {
-        let mut config = GuiPreset::Hybrid.config(u64::MAX);
-        config.allow_unsolvable = true;
-        config.local_search_attempts = 17;
-        let command = config.cli_command();
-        let tokens: Vec<_> = command.split_whitespace().collect();
-        let expected = [
-            ("--size", config.board_size.to_string()),
-            ("--population", config.population_size.to_string()),
-            ("--epochs", config.max_epochs.to_string()),
-            ("--seed", config.seed.to_string()),
-            ("--mutation-rate", config.mutation_rate.to_string()),
-            ("--elite-ratio", config.elite_ratio.to_string()),
-            ("--offspring-ratio", config.offspring_ratio.to_string()),
-            (
-                "--min-diversity-ratio",
-                config.min_diversity_ratio.to_string(),
-            ),
-            ("--selection", config.selection_strategy.to_string()),
-            ("--tournament-size", config.tournament_size.to_string()),
-            ("--local-search-rate", config.local_search_rate.to_string()),
-            ("--local-search-attempts", "17".into()),
-        ];
-        for (flag, value) in expected {
-            assert!(tokens.windows(2).any(|pair| pair == [flag, value.as_str()]));
-        }
-        assert!(tokens.contains(&"--allow-unsolvable"));
-    }
-
-    #[test]
     fn export_is_rectangular_reproducible_and_does_not_overwrite() {
         let result = finished(GuiConfig {
             board_size: 3,
@@ -557,16 +472,27 @@ mod tests {
         ));
         run.export_csv(&path).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), csv);
-        assert_eq!(
-            run.export_csv(&path).unwrap_err().kind(),
-            io::ErrorKind::AlreadyExists
-        );
+        // A longer existing file is replaced entirely, not partly overwritten.
+        std::fs::write(&path, csv.repeat(2)).unwrap();
+        run.export_csv(&path).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), csv);
         std::fs::remove_file(path).unwrap();
     }
 
     #[test]
-    fn comparison_and_export_layout_run_without_a_window() {
+    fn completing_a_comparison_pair_shows_it() {
+        let result = finished(GuiConfig::default());
+        let mut app = NQueensApp::default();
+        let a = app.archive.record(Arc::clone(&result));
+        let b = app.archive.record(result);
+        app.toggle_comparison(0, a);
+        assert_eq!(app.chart_view, ChartView::Metrics);
+        app.toggle_comparison(1, b);
+        assert_eq!(app.chart_view, ChartView::Comparison);
+    }
+
+    #[test]
+    fn history_and_comparison_layout_run_without_a_window() {
         let result = finished(GuiConfig {
             board_size: 3,
             population_size: 1,
@@ -577,16 +503,10 @@ mod tests {
         let b = app.archive.record(result);
         app.archive.compare = [Some(a), Some(b)];
         app.archive.viewed = Some(a);
-        app.export = Some(ExportDialog {
-            run_id: a,
-            path: "test.csv".into(),
-            error: None,
-        });
         let ctx = egui::Context::default();
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
             app.draw_run_history(ui, &ctx);
             app.draw_comparison(ui);
-            app.draw_export_window(&ctx);
         });
         assert!(!output.shapes.is_empty());
         output.drop_without_applying_deltas();

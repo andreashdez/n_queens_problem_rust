@@ -67,7 +67,7 @@ cargo run --release --locked -- \
   --metrics-csv run-42.csv --json
 ```
 
-The CSV includes configuration, outcomes, elapsed time, best/average conflicts, diversity, adaptive rates, offspring, local-search improvements, and stagnation. Epoch zero is included. CLI CSV export **replaces an existing file** at the chosen path. The [GUI export](../gui/#export-a-run) keeps bounded samples and refuses to overwrite files.
+The CSV includes configuration, outcomes, elapsed time, best/average conflicts, diversity, adaptive rates, offspring, local-search improvements, and stagnation. Epoch zero is included. CLI CSV export **replaces an existing file** at the chosen path. The [GUI export](../gui/#export-a-run) keeps bounded samples and asks before replacing a file.
 
 ## Read an unsolved outcome
 

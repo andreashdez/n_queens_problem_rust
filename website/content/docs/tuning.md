@@ -18,6 +18,26 @@ Run tuning experiments with `cargo run --release`, fixed `--seed` values, and ei
 - Use `--local-search-rate` for harder boards when the GA often gets close but does not finish. Start low, such as `0.02` to `0.05`, and increase `--local-search-attempts` only if metrics show useful local-search improvements.
 - Lower population, offspring ratio, local-search rate, or local-search attempts when elapsed time is the limiting factor rather than solve rate.
 
+## Large boards
+
+At very large sizes most of each epoch goes to crossover, which rebuilds every offspring and recounts its conflicts. A smaller population that leans on local search reaches a solution sooner. The GUI's **Large board · 5000×5000** preset uses `--population 100 --local-search-rate 0.1 --local-search-attempts 16` with the other defaults and a 50,000-epoch budget:
+
+```bash
+cargo run --release --locked -- --size 5000 --population 100 --epochs 50000 \
+  --local-search-rate 0.1 --local-search-attempts 16 --no-board
+```
+
+Measured on 2026-10-22 on an 8-core Apple laptop, on seeds 2–6, which were not used to choose the values. Each configuration ran once per seed:
+
+| Configuration | Solved | Median time | Slowest | Most epochs |
+| --- | ---: | ---: | ---: | ---: |
+| Large-board preset | 5/5 | 48.7 s | 60.6 s | 12,565 |
+| Shipped defaults | 5/5 | 113.5 s | 154.9 s | 22,209 |
+
+Seed 42, which the GUI starts with, is slower than any of these: it solved in 78.5 s at epoch 16,156 in the GUI, after a long stretch at one attacking pair. The budget still leaves about three times that many epochs.
+
+The shipped 5,000-epoch budget is too small at this size: no default run finished within it. Heavier local search, such as rate 0.2 with 32 attempts, found solutions in fewer epochs but took longer overall, because each attempt rescans two queens against the whole board. These are small samples on one machine; run a sweep before relying on the values elsewhere.
+
 ## Parameter sweeps
 
 Start with a small sweep: two local-search rates across three seeds, for six runs total.
