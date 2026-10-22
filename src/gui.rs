@@ -4,10 +4,7 @@
 //! [`controls`] for the left settings panel, [`board`] for the central board,
 //! [`charts`] for the bottom chart panel and [`history`] for the right run-history panel.
 
-use std::{
-    sync::{Arc, atomic::Ordering, mpsc::TryRecvError},
-    time::Duration,
-};
+use std::sync::{Arc, mpsc::TryRecvError};
 
 use eframe::egui::{self, Key, KeyboardShortcut, Modifiers};
 use serde::{Deserialize, Serialize};
@@ -27,7 +24,7 @@ use board::{BoardView, draw_board, draw_empty_board};
 use config::GuiConfig;
 use history::RunArchive;
 use worker::{
-    MetricHistory, Progress, RunResult, RunningRun, Snapshot, WorkerMessage, spawn_solver,
+    MetricHistory, POLL_INTERVAL, Progress, RunResult, RunningRun, Snapshot, WorkerMessage,
 };
 
 /// Opens the native solver interface.
@@ -221,29 +218,24 @@ impl NQueensApp {
         self.chart_generation += 1;
         self.chart_view = ChartView::Metrics;
 
-        let (receiver, cancel) = spawn_solver(self.config.clone());
-        self.running = Some(RunningRun {
-            receiver,
-            cancel,
-            max_epochs: self.config.max_epochs,
-            solver: self.config.solver,
-        });
+        self.running = Some(RunningRun::start(self.config.clone()));
         ctx.request_repaint();
     }
 
     fn cancel_run(&mut self) {
-        if let Some(running) = &self.running {
-            running.cancel.store(true, Ordering::Relaxed);
+        if let Some(running) = &mut self.running {
+            running.worker.cancel();
             self.cancel_requested = true;
         }
     }
 
     fn drain_worker_messages(&mut self, ctx: &egui::Context) {
         let mut finished = false;
-        if let Some(running) = &self.running {
+        if let Some(running) = &mut self.running {
+            running.worker.advance();
             // At most one pending snapshot and one terminal message per frame.
             for _ in 0..2 {
-                match running.receiver.try_recv() {
+                match running.worker.try_recv() {
                     Ok(WorkerMessage::Snapshot(snapshot)) => {
                         self.history.push(snapshot.progress.clone(), false);
                         self.latest_snapshot = Some(snapshot);
@@ -280,7 +272,7 @@ impl NQueensApp {
             self.running = None;
             self.cancel_requested = false;
         } else if self.running.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(33));
+            ctx.request_repaint_after(POLL_INTERVAL);
         }
     }
 
@@ -406,8 +398,8 @@ impl Default for NQueensApp {
 
 impl Drop for NQueensApp {
     fn drop(&mut self) {
-        if let Some(running) = &self.running {
-            running.cancel.store(true, Ordering::Relaxed);
+        if let Some(running) = &mut self.running {
+            running.worker.cancel();
         }
     }
 }
@@ -686,8 +678,10 @@ mod tests {
         drop(sender);
         let mut app = NQueensApp::default();
         app.running = Some(RunningRun {
-            receiver,
-            cancel: Arc::new(AtomicBool::new(false)),
+            worker: worker::Worker {
+                receiver,
+                cancel: Arc::new(AtomicBool::new(false)),
+            },
             max_epochs: 1,
             solver: Solver::Ga,
         });

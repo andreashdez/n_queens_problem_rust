@@ -248,8 +248,13 @@ where
     })
 }
 
-/// Counters and the best board, kept across restarts.
-struct SearchState {
+/// A search in progress, advanced one repair pass at a time by [`Self::step`].
+///
+/// [`solve`] and [`solve_with_progress`] drive one to completion.
+pub struct MinConflictsSearch {
+    config: MinConflictsConfig,
+    rng: StdRng,
+    board: Board,
     started_at: Instant,
     passes: u32,
     swaps: u64,
@@ -257,26 +262,168 @@ struct SearchState {
     last_restart_pass: Option<u32>,
     best_rows: Vec<u16>,
     best_attacking_pairs: u64,
+    stop_reason: Option<StopReason>,
 }
 
-impl SearchState {
-    fn record_best(&mut self, board: &Board) {
-        if board.attacking_pairs < self.best_attacking_pairs {
-            self.best_rows.clone_from(&board.rows);
-            self.best_attacking_pairs = board.attacking_pairs;
+impl MinConflictsSearch {
+    /// Builds the greedy start board, which is pass zero. A solved start board stops the search.
+    ///
+    /// # Errors
+    /// Returns [`MinConflictsConfigError`] if [`MinConflictsConfig::validate`] rejects the configuration.
+    pub fn new(config: MinConflictsConfig) -> Result<Self, MinConflictsConfigError> {
+        config.validate()?;
+
+        let started_at = Instant::now();
+        let mut rng = StdRng::seed_from_u64(config.seed);
+        let board = Board::greedy(config.size, &mut rng);
+        log::info!(
+            "running min-conflicts size={} max_passes={} initial_attacking_pairs={}",
+            config.size,
+            config.max_passes,
+            board.attacking_pairs,
+        );
+        let mut search = Self {
+            config,
+            rng,
+            best_rows: board.rows.clone(),
+            best_attacking_pairs: board.attacking_pairs,
+            board,
+            started_at,
+            passes: 0,
+            swaps: 0,
+            restarts: 0,
+            last_restart_pass: None,
+            stop_reason: None,
+        };
+        if search.board.attacking_pairs == 0 {
+            search.stop(StopReason::Solved);
+        }
+        Ok(search)
+    }
+
+    /// Runs the next repair pass and returns true, or returns false once the search has stopped.
+    ///
+    /// Before the first pass, boards of size 2 and 3 stop the search as
+    /// [`StopReason::Unsolvable`] unless `allow_unsolvable` is set.
+    pub fn step(&mut self) -> bool {
+        if self.stop_reason.is_some() {
+            return false;
+        }
+        if self.passes == 0 && !self.config.allow_unsolvable && matches!(self.config.size, 2 | 3) {
+            log::warn!("board size has no solution; use allow_unsolvable for experiments");
+            self.stop(StopReason::Unsolvable);
+            return false;
+        }
+        if self.passes == self.config.max_passes {
+            self.stop(StopReason::EpochLimit);
+            return false;
+        }
+        self.passes += 1;
+
+        let pass_start_pairs = self.board.attacking_pairs;
+        self.swaps += self.board.repair_pass(&mut self.rng);
+        self.record_best();
+        if self.board.attacking_pairs != 0 && self.board.attacking_pairs == pass_start_pairs {
+            self.restarts += 1;
+            self.last_restart_pass = Some(self.passes);
+            log::debug!(
+                "min-conflicts restart pass={} attacking_pairs={}",
+                self.passes,
+                self.board.attacking_pairs
+            );
+            self.board = Board::greedy(self.config.size, &mut self.rng);
+            self.record_best();
+        }
+
+        if self.board.attacking_pairs == 0 {
+            self.stop(StopReason::Solved);
+        }
+        true
+    }
+
+    /// Stops the search as [`StopReason::Cancelled`]; a stopped search keeps its stop reason.
+    pub fn cancel(&mut self) {
+        if self.stop_reason.is_none() {
+            self.stop(StopReason::Cancelled);
         }
     }
 
-    fn metrics(&self, board: &Board) -> PassMetrics {
+    /// Why the search stopped, or `None` while it can still run passes.
+    #[must_use]
+    pub const fn stop_reason(&self) -> Option<StopReason> {
+        self.stop_reason
+    }
+
+    /// The state after the latest pass, or after the start board for pass zero.
+    #[must_use]
+    pub fn metrics(&self) -> PassMetrics {
         PassMetrics {
             pass: self.passes,
-            current_conflicts_sum: pairs_u32(board.attacking_pairs),
+            current_conflicts_sum: pairs_u32(self.board.attacking_pairs),
             best_conflicts_sum: pairs_u32(self.best_attacking_pairs),
             swaps: self.swaps,
             restarts: self.restarts,
             last_restart_pass: self.last_restart_pass,
             elapsed_ms: self.started_at.elapsed().as_millis(),
         }
+    }
+
+    /// The best rows seen so far, across restarts.
+    #[must_use]
+    pub fn best_rows(&self) -> &[u16] {
+        &self.best_rows
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> PassSnapshot {
+        PassSnapshot {
+            metrics: self.metrics(),
+            best_chromosome: Chromosome::new_unchecked(self.best_rows.clone()),
+        }
+    }
+
+    /// The search's result; one stopped before it finished reports [`StopReason::Cancelled`].
+    #[must_use]
+    pub fn into_result(self) -> MinConflictsResult {
+        let best_chromosome = Chromosome::new_unchecked(self.best_rows);
+        debug_assert_eq!(
+            u64::from(best_chromosome.get_conflicts_sum()),
+            self.best_attacking_pairs
+        );
+
+        MinConflictsResult {
+            best_chromosome,
+            stop_reason: self.stop_reason.unwrap_or(StopReason::Cancelled),
+            passes: self.passes,
+            swaps: self.swaps,
+            restarts: self.restarts,
+            elapsed_ms: self.started_at.elapsed().as_millis(),
+        }
+    }
+
+    fn record_best(&mut self) {
+        if self.board.attacking_pairs < self.best_attacking_pairs {
+            self.best_rows.clone_from(&self.board.rows);
+            self.best_attacking_pairs = self.board.attacking_pairs;
+        }
+    }
+
+    fn stop(&mut self, stop_reason: StopReason) {
+        let Self {
+            passes,
+            swaps,
+            restarts,
+            best_attacking_pairs,
+            ..
+        } = *self;
+        if stop_reason == StopReason::Solved {
+            log::info!("min-conflicts solved passes={passes} swaps={swaps} restarts={restarts}");
+        } else {
+            log::warn!(
+                "no solution found best_attacking_pairs={best_attacking_pairs} passes={passes} restarts={restarts} stop_reason={stop_reason}"
+            );
+        }
+        self.stop_reason = Some(stop_reason);
     }
 }
 
@@ -291,101 +438,15 @@ fn search(
     config: MinConflictsConfig,
     mut on_pass: impl FnMut(PassMetrics, &[u16]) -> bool,
 ) -> Result<MinConflictsResult, MinConflictsConfigError> {
-    config.validate()?;
-
-    let started_at = Instant::now();
-    let mut rng = StdRng::seed_from_u64(config.seed);
-    let mut board = Board::greedy(config.size, &mut rng);
-    let mut state = SearchState {
-        started_at,
-        passes: 0,
-        swaps: 0,
-        restarts: 0,
-        last_restart_pass: None,
-        best_rows: board.rows.clone(),
-        best_attacking_pairs: board.attacking_pairs,
-    };
-    log::info!(
-        "running min-conflicts size={} max_passes={} initial_attacking_pairs={}",
-        config.size,
-        config.max_passes,
-        board.attacking_pairs,
-    );
-
-    let stop_reason = 'search: {
-        let keep_going = on_pass(state.metrics(&board), &state.best_rows);
-        if board.attacking_pairs == 0 {
-            break 'search StopReason::Solved;
+    let mut search = MinConflictsSearch::new(config)?;
+    loop {
+        if !on_pass(search.metrics(), search.best_rows()) {
+            search.cancel();
         }
-        if !keep_going {
-            break 'search StopReason::Cancelled;
+        if !search.step() {
+            return Ok(search.into_result());
         }
-        if !config.allow_unsolvable && matches!(config.size, 2 | 3) {
-            log::warn!("board size has no solution; use allow_unsolvable for experiments");
-            break 'search StopReason::Unsolvable;
-        }
-
-        loop {
-            if state.passes == config.max_passes {
-                break 'search StopReason::EpochLimit;
-            }
-            state.passes += 1;
-
-            let pass_start_pairs = board.attacking_pairs;
-            state.swaps += board.repair_pass(&mut rng);
-            state.record_best(&board);
-            if board.attacking_pairs != 0 && board.attacking_pairs == pass_start_pairs {
-                state.restarts += 1;
-                state.last_restart_pass = Some(state.passes);
-                log::debug!(
-                    "min-conflicts restart pass={} attacking_pairs={}",
-                    state.passes,
-                    board.attacking_pairs
-                );
-                board = Board::greedy(config.size, &mut rng);
-                state.record_best(&board);
-            }
-
-            let keep_going = on_pass(state.metrics(&board), &state.best_rows);
-            if board.attacking_pairs == 0 {
-                break 'search StopReason::Solved;
-            }
-            if !keep_going {
-                break 'search StopReason::Cancelled;
-            }
-        }
-    };
-
-    let SearchState {
-        passes,
-        swaps,
-        restarts,
-        best_rows,
-        best_attacking_pairs,
-        ..
-    } = state;
-    if stop_reason == StopReason::Solved {
-        log::info!("min-conflicts solved passes={passes} swaps={swaps} restarts={restarts}");
-    } else {
-        log::warn!(
-            "no solution found best_attacking_pairs={best_attacking_pairs} passes={passes} restarts={restarts} stop_reason={stop_reason}"
-        );
     }
-
-    let best_chromosome = Chromosome::new_unchecked(best_rows);
-    debug_assert_eq!(
-        u64::from(best_chromosome.get_conflicts_sum()),
-        best_attacking_pairs
-    );
-
-    Ok(MinConflictsResult {
-        best_chromosome,
-        stop_reason,
-        passes,
-        swaps,
-        restarts,
-        elapsed_ms: started_at.elapsed().as_millis(),
-    })
 }
 
 /// A row permutation with occupancy counts for both diagonal directions.
@@ -619,6 +680,36 @@ mod tests {
                     .all(|pair| { pair[1].best_conflicts_sum() <= pair[0].best_conflicts_sum() })
             );
         }
+    }
+
+    #[test]
+    fn stepping_a_search_matches_solve() {
+        let config = MinConflictsConfig::new(200, 100, 7);
+        let expected = solve(config).unwrap();
+        let mut search = MinConflictsSearch::new(config).unwrap();
+        while search.step() {
+            assert_eq!(search.snapshot().metrics().pass(), search.metrics().pass());
+        }
+        assert_eq!(search.stop_reason(), Some(expected.stop_reason()));
+        search.cancel();
+        let result = search.into_result();
+        assert_eq!(result.stop_reason(), expected.stop_reason());
+        assert_eq!(
+            result.best_chromosome().get_positions(),
+            expected.best_chromosome().get_positions()
+        );
+        assert_eq!(
+            (result.passes(), result.swaps(), result.restarts()),
+            (expected.passes(), expected.swaps(), expected.restarts())
+        );
+
+        let mut running = MinConflictsSearch::new(
+            MinConflictsConfig::new(3, 100, 42).with_allow_unsolvable(true),
+        )
+        .unwrap();
+        assert!(running.step());
+        assert_eq!(running.stop_reason(), None);
+        assert_eq!(running.into_result().stop_reason(), StopReason::Cancelled);
     }
 
     #[test]
