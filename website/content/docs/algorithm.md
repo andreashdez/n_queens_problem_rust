@@ -43,8 +43,8 @@ A diversity refresh and a soft restart are different events. Dashed **Soft resta
 
 | Metric | Meaning |
 | --- | --- |
-| Best conflicts | Best conflict sum found so far. Zero means solved. Each attacking pair contributes to both queens' counts. |
-| Average conflicts | Mean conflict sum of the current population. |
+| Best conflicts | Fewest attacking pairs on any board found so far. Zero means solved. |
+| Average conflicts | Mean attacking pairs per board in the current population. |
 | Diversity ratio | Unique board permutations divided by population size. |
 | Mutation / elite ratio | The rates applied for that epoch, including adaptive changes. |
 | Stagnation epochs | Epochs since the latest improvement or stagnation reset. |
@@ -71,7 +71,7 @@ A lower diversity ratio alone does not prove that a restart happened. Use the ex
 
 ## A concrete conflict count
 
-On a 4×4 board, permutation `[0, 2, 1, 3]` has two attacking pairs: columns 1 and 4 share a diagonal, as do columns 2 and 3 (using GUI's one-based labels). Every queen has one conflict, so the total conflict sum is **4**, not 2. A solved permutation such as `[1, 3, 0, 2]` has sum **0**.
+On a 4×4 board, permutation `[0, 2, 1, 3]` has two attacking pairs: columns 1 and 4 share a diagonal, as do columns 2 and 3 (using GUI's one-based labels). Its conflict sum, the score the solver minimizes, is therefore **2**. Every queen is attacked by one other queen, so the per-queen counts on the board and in JSON `conflicts` are `[1, 1, 1, 1]`; they add up to twice the conflict sum because each pair involves two queens. A solved permutation such as `[1, 3, 0, 2]` has sum **0**.
 
 ## A min-conflicts baseline
 

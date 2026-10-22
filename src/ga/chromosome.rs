@@ -441,6 +441,16 @@ mod tests {
         assert_eq!(conflicts_sum, 2);
     }
 
+    /// The worked example in the algorithm docs: the sum counts each attacking
+    /// pair once, while the per-queen counts include both queens of every pair.
+    #[test]
+    fn test_conflicts_sum_counts_attacking_pairs_once() {
+        let chromosome = Chromosome::new(vec![0, 2, 1, 3]);
+        assert_eq!(chromosome.get_conflicts_sum(), 2);
+        assert_eq!(chromosome.get_conflicts(), &[1, 1, 1, 1]);
+        assert_eq!(Chromosome::new(vec![1, 3, 0, 2]).get_conflicts_sum(), 0);
+    }
+
     #[test]
     fn test_conflicts_counter_small_boards() {
         let single_queen = Chromosome::new(vec![0]);
