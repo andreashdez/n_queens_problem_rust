@@ -57,6 +57,23 @@ The table shows four selected presets. The complete validation includes all eigh
 | [Exploration results](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-09-14-n18/summary.csv) | Earlier experiments using seeds 1–10. |
 | [Criterion output](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-09-14-criterion.txt) | Phase estimates and reported outliers. |
 
+## Min-conflicts baseline
+
+These measurements were recorded on **2026-10-22**, on macOS/aarch64 (Apple M2) with eight Rayon threads and Rust 1.99.1, from a release build of the change that added `--solver min-conflicts`. Each cell covers seeds 101–120 with the default 5,000-epoch (or pass) budget; the GA used its shipped defaults. Runtimes are the solvers' own `elapsed_ms`, which has millisecond resolution.
+
+| Board size | GA solved | GA median runtime | Min-conflicts solved | Min-conflicts median runtime |
+| ---: | ---: | ---: | ---: | ---: |
+| 8 | 20/20 | < 1 ms | 20/20 | < 1 ms |
+| 18 | 20/20 | 5 ms | 20/20 | < 1 ms |
+| 32 | 20/20 | 12 ms | 20/20 | < 1 ms |
+| 64 | 20/20 | 31.5 ms | 20/20 | < 1 ms |
+| 100 | 20/20 | 46.5 ms | 20/20 | < 1 ms |
+| 1,000 | Not measured | — | 20/20 | < 1 ms |
+| 10,000 | Not measured | — | 20/20 | 2 ms |
+| 65,535 | Not measured | — | 20/20 | 14 ms |
+
+Min-conflicts needed a median of 2 to 39 passes and at most 15 restarts per run; its slowest run at 65,535 took 50 ms. That size is the largest the `u16` row encoding allows. The gap reflects the method, not tuning: min-conflicts repairs one board with constant-time swap checks, while the GA evaluates and recombines a population every epoch. Use the baseline to judge how much of a run's cost comes from the evolutionary search itself.
+
 ## Profiling
 
 ```bash

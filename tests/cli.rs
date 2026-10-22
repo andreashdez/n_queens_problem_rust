@@ -417,3 +417,59 @@ fn fail_unsolved_sets_exit_status_only_for_unsolved_runs() {
     let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(summary["stop_reason"], "solved");
 }
+
+#[test]
+fn min_conflicts_solver_solves_and_reports_its_own_fields() {
+    let output = run_success(&[
+        "--solver",
+        "min-conflicts",
+        "--size",
+        "500",
+        "--seed",
+        "42",
+        "--json",
+    ]);
+    let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(summary["solver"], "min-conflicts");
+    assert_eq!(summary["stop_reason"], "solved");
+    assert_eq!(summary["best_chromosome"]["conflicts_sum"], 0);
+    assert_eq!(summary["solved_epoch"], summary["passes"]);
+    assert!(summary["swaps"].is_u64() && summary["restarts"].is_u64());
+    assert!(summary.get("final_population").is_none());
+
+    let output = run_success(&[
+        "--solver",
+        "min-conflicts",
+        "--size",
+        "8",
+        "--seed",
+        "42",
+        "--quiet",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Stop reason: solved"), "{stdout}");
+    assert!(stdout.contains("Passes: "), "{stdout}");
+}
+
+#[test]
+fn min_conflicts_rejects_ga_only_flags_and_honours_fail_unsolved() {
+    for flag in [
+        &["--population", "10"][..],
+        &["--mutation-rate", "0.5"],
+        &["--profile"],
+    ] {
+        let output = run_command(&[&["--solver", "min-conflicts", "--json"][..], flag].concat());
+        assert_eq!(output.status.code(), Some(2), "{}", output_text(&output));
+        assert!(
+            output_text(&output).contains(&format!("{} only applies to --solver ga", flag[0])),
+            "{}",
+            output_text(&output)
+        );
+    }
+
+    let unsolved = ["--solver", "min-conflicts", "--size", "3", "--json"];
+    let summary: Value = serde_json::from_slice(&run_success(&unsolved).stdout).unwrap();
+    assert_eq!(summary["stop_reason"], "unsolvable");
+    let output = run_command(&[&unsolved[..], &["--fail-unsolved"]].concat());
+    assert_eq!(output.status.code(), Some(1), "{}", output_text(&output));
+}

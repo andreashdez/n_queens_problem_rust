@@ -32,4 +32,19 @@ Epoch zero is reported before evolution. Sizes 2 and 3 stop there unless `allow_
 
 Use `GaConfig::validated()` or `GaConfig::try_new()` to check configuration before building. `ga::build_genetic_algorithm()` also validates its input and returns an error for invalid public configuration values.
 
+For a non-evolutionary reference point, `min_conflicts::solve()` runs the [min-conflicts baseline](../algorithm/#a-min-conflicts-baseline) on a single board:
+
+```rust
+use n_queens_problem::min_conflicts::{self, MinConflictsConfig};
+
+fn main() -> Result<(), min_conflicts::MinConflictsConfigError> {
+    let result = min_conflicts::solve(MinConflictsConfig::new(1_000, 100, 42))?;
+    println!("{} after {} passes", result.stop_reason(), result.passes());
+    println!("conflicts: {}", result.best_chromosome().get_conflicts_sum());
+    Ok(())
+}
+```
+
+`MinConflictsConfig::new(size, max_passes, seed)` rejects a zero size or pass budget. Sizes 2 and 3 stop as `Unsolvable` unless you add `.with_allow_unsolvable(true)`. The result's `best_chromosome()` is the same `Chromosome` type the GA returns.
+
 [Understand the algorithm →](../algorithm/) · [Development checks →](../development/)

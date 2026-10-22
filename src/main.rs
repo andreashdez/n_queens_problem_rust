@@ -5,8 +5,15 @@ use std::{
     process::{self, ExitCode},
 };
 
-use clap::{ArgAction, Parser};
-use n_queens_problem::{ga, tui};
+use clap::{
+    ArgAction, ArgMatches, CommandFactory, FromArgMatches, Parser, error::ErrorKind,
+    parser::ValueSource,
+};
+use n_queens_problem::{
+    ga,
+    min_conflicts::{self, MinConflictsConfig},
+    tui,
+};
 use rand::RngExt;
 use serde_json::json;
 use simple_logger::SimpleLogger;
@@ -22,6 +29,36 @@ const DEFAULT_SELECTION_STRATEGY: ga::SelectionStrategy = ga::DEFAULT_SELECTION_
 const DEFAULT_TOURNAMENT_SIZE: usize = ga::DEFAULT_TOURNAMENT_SIZE;
 const DEFAULT_LOCAL_SEARCH_RATE: f32 = ga::DEFAULT_LOCAL_SEARCH_RATE;
 const DEFAULT_LOCAL_SEARCH_ATTEMPTS: usize = ga::DEFAULT_LOCAL_SEARCH_ATTEMPTS;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Solver {
+    Ga,
+    MinConflicts,
+}
+
+impl std::fmt::Display for Solver {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Ga => "ga",
+            Self::MinConflicts => "min-conflicts",
+        })
+    }
+}
+
+/// Flags that only configure the genetic algorithm, by clap argument id.
+const GA_ONLY_ARGS: [&str; 11] = [
+    "population_size",
+    "mutation_rate",
+    "elite_ratio",
+    "offspring_ratio",
+    "min_diversity_ratio",
+    "selection_strategy",
+    "tournament_size",
+    "local_search_rate",
+    "local_search_attempts",
+    "metrics_csv",
+    "profile",
+];
 
 #[derive(Debug, Parser)]
 #[command(name = "n_queens_problem")]
@@ -45,6 +82,14 @@ struct RunConfig {
     )]
     board_size: u16,
     #[arg(
+        long = "solver",
+        value_name = "ga|min-conflicts",
+        default_value_t = Solver::Ga,
+        value_parser = parse_solver,
+        help = "Search algorithm: the genetic algorithm or a min-conflicts baseline"
+    )]
+    solver: Solver,
+    #[arg(
         short = 'p',
         long = "population",
         value_name = "COUNT",
@@ -59,7 +104,7 @@ struct RunConfig {
         value_name = "COUNT",
         default_value_t = DEFAULT_MAX_EPOCHS,
         value_parser = parse_positive_u32,
-        help = "Maximum GA epochs"
+        help = "Maximum GA epochs, or repair passes for min-conflicts"
     )]
     max_epochs: u32,
     #[arg(
@@ -178,8 +223,8 @@ struct RunConfig {
 }
 
 /// Exit status for a finished run: failure only for an unsolved run under `--fail-unsolved`.
-fn run_exit_code(run_config: &RunConfig, run_metrics: &ga::RunMetrics) -> ExitCode {
-    if run_config.fail_unsolved && run_metrics.stop_reason() != ga::StopReason::Solved {
+fn run_exit_code(run_config: &RunConfig, stop_reason: ga::StopReason) -> ExitCode {
+    if run_config.fail_unsolved && stop_reason != ga::StopReason::Solved {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
@@ -209,6 +254,7 @@ fn print_run_summary_json(
 ) -> Result<(), String> {
     let final_epoch = run_metrics.epochs().last();
     let summary = json!({
+        "solver": Solver::Ga.to_string(),
         "seed": seed,
         "board_size": run_config.board_size,
         "target_population": run_config.population_size,
@@ -386,6 +432,14 @@ fn parse_selection_strategy(raw_value: &str) -> Result<ga::SelectionStrategy, St
     }
 }
 
+fn parse_solver(raw_value: &str) -> Result<Solver, String> {
+    match raw_value.to_ascii_lowercase().as_str() {
+        "ga" => Ok(Solver::Ga),
+        "min-conflicts" => Ok(Solver::MinConflicts),
+        _ => Err("must be one of: ga, min-conflicts".to_owned()),
+    }
+}
+
 fn parse_log_level(raw_value: &str) -> Result<log::LevelFilter, String> {
     match raw_value.to_ascii_lowercase().as_str() {
         "off" => Ok(log::LevelFilter::Off),
@@ -419,8 +473,18 @@ fn validated_ga_config(
     .validated()
 }
 
+/// Parses the command line, rejecting GA-only flags under `--solver min-conflicts`.
+fn parse_run_config() -> RunConfig {
+    let matches = RunConfig::command().get_matches();
+    let run_config = RunConfig::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    if run_config.solver == Solver::MinConflicts {
+        reject_ga_only_args(&matches);
+    }
+    run_config
+}
+
 fn main() -> ExitCode {
-    let run_config = RunConfig::parse();
+    let run_config = parse_run_config();
     let log_level = if run_config.quiet || run_config.json_output {
         log::LevelFilter::Off
     } else {
@@ -432,6 +496,9 @@ fn main() -> ExitCode {
     let seed = run_config
         .seed
         .unwrap_or_else(|| rand::rng().random::<u64>());
+    if run_config.solver == Solver::MinConflicts {
+        return run_min_conflicts(&run_config, seed);
+    }
     let ga_config = validated_ga_config(&run_config, seed).unwrap_or_else(|error| {
         eprintln!("invalid GA config: {error}");
         process::exit(2);
@@ -498,7 +565,7 @@ fn main() -> ExitCode {
             eprintln!("{error}");
             process::exit(2);
         });
-        return run_exit_code(&run_config, &run_metrics);
+        return run_exit_code(&run_config, run_metrics.stop_reason());
     }
 
     log::info!("done running epoch");
@@ -524,5 +591,89 @@ fn main() -> ExitCode {
     }
 
     log::info!("done n_queens_problem");
-    run_exit_code(&run_config, &run_metrics)
+    run_exit_code(&run_config, run_metrics.stop_reason())
+}
+
+/// Exits with a usage error if a GA-only flag was given alongside `--solver min-conflicts`.
+fn reject_ga_only_args(matches: &ArgMatches) {
+    let command = RunConfig::command();
+    let explicit_ga_arg = command.get_arguments().find(|arg| {
+        GA_ONLY_ARGS.contains(&arg.get_id().as_str())
+            && matches.value_source(arg.get_id().as_str()) == Some(ValueSource::CommandLine)
+    });
+    if let Some(arg) = explicit_ga_arg {
+        let flag = arg.get_long().unwrap_or_else(|| arg.get_id().as_str());
+        RunConfig::command()
+            .error(
+                ErrorKind::ArgumentConflict,
+                format!("--{flag} only applies to --solver ga"),
+            )
+            .exit();
+    }
+}
+
+fn run_min_conflicts(run_config: &RunConfig, seed: u64) -> ExitCode {
+    log::info!(
+        "start n_queens_problem solver=min-conflicts board_size={} max_passes={} seed={seed} draw_board={}",
+        run_config.board_size,
+        run_config.max_epochs,
+        run_config.draw_board,
+    );
+    let config = MinConflictsConfig::new(run_config.board_size, run_config.max_epochs, seed)
+        .with_allow_unsolvable(run_config.allow_unsolvable);
+    let result = min_conflicts::solve(config).unwrap_or_else(|error| {
+        eprintln!("invalid min-conflicts config: {error}");
+        process::exit(2);
+    });
+    let best_chromosome = result.best_chromosome();
+    let solved_epoch = (result.stop_reason() == ga::StopReason::Solved).then_some(result.passes());
+
+    if run_config.json_output {
+        let summary = json!({
+            "solver": Solver::MinConflicts.to_string(),
+            "seed": seed,
+            "board_size": run_config.board_size,
+            "max_epochs": run_config.max_epochs,
+            "elapsed_ms": result.elapsed_ms(),
+            "solved_epoch": solved_epoch,
+            "stop_reason": result.stop_reason().to_string(),
+            "allow_unsolvable": run_config.allow_unsolvable,
+            "passes": result.passes(),
+            "swaps": result.swaps(),
+            "restarts": result.restarts(),
+            "best_chromosome": chromosome_json(best_chromosome),
+        });
+        serde_json::to_writer_pretty(std::io::stdout(), &summary).unwrap_or_else(|error| {
+            eprintln!("failed to write JSON summary: {error}");
+            process::exit(2);
+        });
+        println!();
+        return run_exit_code(run_config, result.stop_reason());
+    }
+
+    println!("--------------------------------");
+    println!("Best  = {best_chromosome:?}");
+    println!(
+        "Passes: {}, swaps: {}, restarts: {}",
+        result.passes(),
+        result.swaps(),
+        result.restarts()
+    );
+    println!("Elapsed (ms): {}", result.elapsed_ms());
+    println!("Stop reason: {}", result.stop_reason());
+    if let Some(solved_epoch) = solved_epoch {
+        println!("Solved Epoch: {solved_epoch}");
+    }
+
+    if run_config.draw_board {
+        tui::draw_board(
+            best_chromosome.get_positions(),
+            best_chromosome.get_conflicts(),
+        );
+    } else {
+        println!("Board rendering disabled (--no-board).");
+    }
+
+    log::info!("done n_queens_problem");
+    run_exit_code(run_config, result.stop_reason())
 }
