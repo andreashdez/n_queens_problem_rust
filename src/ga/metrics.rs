@@ -4,8 +4,9 @@ use std::{
     collections::HashSet,
     fmt,
     hash::{BuildHasher, Hasher},
-    time::Instant,
 };
+
+use web_time::Instant;
 
 use super::chromosome::Chromosome;
 

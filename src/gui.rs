@@ -1,4 +1,4 @@
-//! The native desktop GUI: app state, the worker message loop and the panel layout.
+//! The desktop and web GUI: app state, the worker message loop and the panel layout.
 //!
 //! Each panel is drawn by its own module: [`top_bar`] for run actions and status,
 //! [`controls`] for the left settings panel, [`board`] for the central board,
@@ -34,6 +34,7 @@ use worker::{
 ///
 /// # Errors
 /// Returns an eframe error if the window or graphics backend cannot initialize or run.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -49,6 +50,36 @@ pub fn run() -> eframe::Result<()> {
         native_options,
         Box::new(|cc| Ok(Box::new(NQueensApp::new(cc)))),
     )
+}
+
+/// Starts the solver interface in the page's `<canvas>` with the given id.
+///
+/// # Panics
+/// Panics if the page has no canvas with that id.
+#[cfg(target_arch = "wasm32")]
+pub fn run_web(canvas_id: &str) {
+    use wasm_bindgen::JsCast as _;
+
+    // Fails only if a logger is already installed, which leaves logging working.
+    let _ = eframe::WebLogger::init(log::LevelFilter::Warn);
+    let canvas = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id(canvas_id))
+        .and_then(|element| element.dyn_into::<web_sys::HtmlCanvasElement>().ok())
+        .unwrap_or_else(|| panic!("the page has no <canvas id=\"{canvas_id}\">"));
+
+    wasm_bindgen_futures::spawn_local(async move {
+        let started = eframe::WebRunner::new()
+            .start(
+                canvas,
+                eframe::WebOptions::default(),
+                Box::new(|cc| Ok(Box::new(NQueensApp::new(cc)))),
+            )
+            .await;
+        if let Err(error) = started {
+            log::error!("could not start the GUI: {error:?}");
+        }
+    });
 }
 
 struct NQueensApp {

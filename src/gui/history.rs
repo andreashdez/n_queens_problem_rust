@@ -1,4 +1,6 @@
-use std::{collections::VecDeque, fmt::Write as _, fs, io, path::Path, sync::Arc};
+use std::{collections::VecDeque, fmt::Write as _, sync::Arc};
+#[cfg(not(target_arch = "wasm32"))]
+use std::{fs, io, path::Path};
 
 use eframe::egui;
 
@@ -214,6 +216,7 @@ impl SavedRun {
         output
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn export_csv(&self, path: &Path) -> io::Result<()> {
         // The native save dialog has already confirmed replacing an existing file.
         fs::write(path, self.csv())
@@ -222,6 +225,7 @@ impl SavedRun {
 
 impl NQueensApp {
     /// Asks for a destination with the native save dialog, then writes the CSV.
+    #[cfg(not(target_arch = "wasm32"))]
     fn export_run(&mut self, id: u64, ctx: &egui::Context) {
         let Some(path) = rfd::FileDialog::new()
             .set_title(format!("Export metrics · Run #{id}"))
@@ -240,6 +244,19 @@ impl NQueensApp {
         );
         match run.export_csv(&path) {
             Ok(()) => self.notify(ctx, format!("Exported run #{id} to {name}"), false),
+            Err(error) => self.notify(ctx, format!("Could not export run #{id}: {error}"), true),
+        }
+    }
+
+    /// Hands the CSV to the browser, which saves it like any other download.
+    #[cfg(target_arch = "wasm32")]
+    fn export_run(&mut self, id: u64, ctx: &egui::Context) {
+        let Some(run) = self.archive.get(id) else {
+            return;
+        };
+        let name = format!("n-queens-run-{id}.csv");
+        match download(&name, &run.csv()) {
+            Ok(()) => self.notify(ctx, format!("Exported run #{id} as {name}"), false),
             Err(error) => self.notify(ctx, format!("Could not export run #{id}: {error}"), true),
         }
     }
@@ -402,6 +419,44 @@ impl NQueensApp {
         }
         .show(ui, (a.id, b.id), &series, &markers);
     }
+}
+
+/// Starts a browser download of `contents` through a temporary object URL.
+#[cfg(target_arch = "wasm32")]
+fn download(file_name: &str, contents: &str) -> Result<(), String> {
+    use wasm_bindgen::{JsCast as _, JsValue, closure::Closure};
+
+    /// Long enough for the browser to start reading the blob before its URL is released.
+    const REVOKE_AFTER_MS: i32 = 10_000;
+
+    let describe = |error: JsValue| format!("{error:?}");
+    let window = web_sys::window().ok_or("no browser window")?;
+    let document = window.document().ok_or("no document")?;
+    let options = web_sys::BlobPropertyBag::new();
+    options.set_type("text/csv");
+    let parts = js_sys::Array::of1(&JsValue::from_str(contents));
+    let blob =
+        web_sys::Blob::new_with_str_sequence_and_options(&parts, &options).map_err(describe)?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(describe)?;
+
+    let anchor: web_sys::HtmlAnchorElement = document
+        .create_element("a")
+        .map_err(describe)?
+        .unchecked_into();
+    anchor.set_href(&url);
+    anchor.set_download(file_name);
+    anchor.click();
+
+    let revoke = Closure::once_into_js(move || {
+        let _ = web_sys::Url::revoke_object_url(&url);
+    });
+    window
+        .set_timeout_with_callback_and_timeout_and_arguments_0(
+            revoke.unchecked_ref(),
+            REVOKE_AFTER_MS,
+        )
+        .map_err(describe)?;
+    Ok(())
 }
 
 #[cfg(test)]

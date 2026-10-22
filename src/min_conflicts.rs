@@ -19,9 +19,10 @@
 //! assert_eq!(result.best_chromosome().get_conflicts_sum(), 0);
 //! ```
 
-use std::{error::Error, fmt, time::Instant};
+use std::{error::Error, fmt};
 
 use rand::{RngExt, SeedableRng, rngs::StdRng, seq::SliceRandom};
+use web_time::Instant;
 
 use crate::ga::{StopReason, chromosome::Chromosome};
 

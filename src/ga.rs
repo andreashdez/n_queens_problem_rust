@@ -6,10 +6,9 @@
 //! parent and survivor selection, and `diversity` for refreshes and soft restarts.
 //! `config` holds the public configuration and `metrics` the run metrics.
 
-use std::time::Instant;
-
 use rand::{SeedableRng, rngs::StdRng};
 use rayon::prelude::*;
+use web_time::Instant;
 
 use self::{
     chromosome::Chromosome,
