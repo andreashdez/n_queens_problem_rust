@@ -23,7 +23,7 @@ pages = [
 lines = [
     "# N-Queens in Rust",
     "",
-    "A Rust genetic solver with a native desktop GUI, CLI, and library API.",
+    "A Rust genetic solver with a desktop and browser GUI, CLI, and library API.",
     "",
     f"The full documentation lives on **[GitHub Pages]({site})**.",
     "This index links to the current guides so the Wiki and website stay in sync.",

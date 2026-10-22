@@ -1,6 +1,6 @@
 # N-Queens in Rust
 
-A genetic algorithm that places N queens on an N×N board without sharing a row, column, or diagonal. Explore the search in a native desktop GUI, run seeded experiments from the command line, or use the Rust library.
+A genetic algorithm that places N queens on an N×N board without sharing a row, column, or diagonal. Explore the search in a desktop or browser GUI, run seeded experiments from the command line, or use the Rust library.
 
 ![N-Queens desktop GUI showing a solved 18×18 board, solver settings, run history, and conflict and population-ratio charts.](website/assets/gui-overview.jpg)
 
@@ -25,7 +25,7 @@ cargo run --release --locked --features gui --bin n_queens_gui
 
 Keep **Recommended defaults · 18×18** and seed **42**, then click **Run solver** to try the example pictured above. Click queens to inspect conflicts, zoom and pan the board, compare runs, and export metrics. Run history lasts for the current session.
 
-The GUI is a native application; the documentation website does not run the solver in your browser.
+To try the GUI without building it, [open it in your browser](https://andreashdez.github.io/n_queens_problem_rust/demo/). It is the same app compiled to WebAssembly, and slower than the desktop app on large boards.
 
 ### Command line
 

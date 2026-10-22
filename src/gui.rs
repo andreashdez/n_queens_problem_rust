@@ -49,19 +49,25 @@ pub fn run() -> eframe::Result<()> {
     )
 }
 
-/// Starts the solver interface in the page's `<canvas>` with the given id.
+/// Starts the solver interface in the page's `<canvas>` with id `canvas_id`.
+///
+/// The element with id `status_id`, if the page has one, is removed once the
+/// interface starts, or shows the error if it cannot.
 ///
 /// # Panics
 /// Panics if the page has no canvas with that id.
 #[cfg(target_arch = "wasm32")]
-pub fn run_web(canvas_id: &str) {
+pub fn run_web(canvas_id: &str, status_id: &str) {
     use wasm_bindgen::JsCast as _;
 
     // Fails only if a logger is already installed, which leaves logging working.
     let _ = eframe::WebLogger::init(log::LevelFilter::Warn);
-    let canvas = web_sys::window()
+    let document = web_sys::window()
         .and_then(|window| window.document())
-        .and_then(|document| document.get_element_by_id(canvas_id))
+        .expect("runs in a browser page");
+    let status = document.get_element_by_id(status_id);
+    let canvas = document
+        .get_element_by_id(canvas_id)
         .and_then(|element| element.dyn_into::<web_sys::HtmlCanvasElement>().ok())
         .unwrap_or_else(|| panic!("the page has no <canvas id=\"{canvas_id}\">"));
 
@@ -73,8 +79,17 @@ pub fn run_web(canvas_id: &str) {
                 Box::new(|cc| Ok(Box::new(NQueensApp::new(cc)))),
             )
             .await;
-        if let Err(error) = started {
-            log::error!("could not start the GUI: {error:?}");
+        match (started, status) {
+            (Ok(()), Some(status)) => status.remove(),
+            (Ok(()), None) => {}
+            (Err(error), status) => {
+                log::error!("could not start the GUI: {error:?}");
+                if let Some(status) = status {
+                    // Usually a browser without WebGL.
+                    status
+                        .set_text_content(Some(&format!("Could not start the solver: {error:?}")));
+                }
+            }
         }
     });
 }

@@ -25,7 +25,7 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 js-sys = { version = "0.3", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
-web-sys = { version = "0.3", optional = true, features = ["Blob", "BlobPropertyBag", "Document", "HtmlAnchorElement", "HtmlCanvasElement", "Url", "Window"] }
+web-sys = { version = "0.3", optional = true, features = ["Blob", "BlobPropertyBag", "Document", "Element", "HtmlAnchorElement", "HtmlCanvasElement", "Node", "Url", "Window"] }
 
 [features]
 default = []
