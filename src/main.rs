@@ -10,7 +10,7 @@ use clap::{
     parser::ValueSource,
 };
 use n_queens_problem::{
-    ga,
+    Solver, ga,
     min_conflicts::{self, MinConflictsConfig},
     tui,
 };
@@ -29,21 +29,6 @@ const DEFAULT_SELECTION_STRATEGY: ga::SelectionStrategy = ga::DEFAULT_SELECTION_
 const DEFAULT_TOURNAMENT_SIZE: usize = ga::DEFAULT_TOURNAMENT_SIZE;
 const DEFAULT_LOCAL_SEARCH_RATE: f32 = ga::DEFAULT_LOCAL_SEARCH_RATE;
 const DEFAULT_LOCAL_SEARCH_ATTEMPTS: usize = ga::DEFAULT_LOCAL_SEARCH_ATTEMPTS;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Solver {
-    Ga,
-    MinConflicts,
-}
-
-impl std::fmt::Display for Solver {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Ga => "ga",
-            Self::MinConflicts => "min-conflicts",
-        })
-    }
-}
 
 /// Flags that only configure the genetic algorithm, by clap argument id.
 const GA_ONLY_ARGS: [&str; 11] = [
@@ -433,11 +418,7 @@ fn parse_selection_strategy(raw_value: &str) -> Result<ga::SelectionStrategy, St
 }
 
 fn parse_solver(raw_value: &str) -> Result<Solver, String> {
-    match raw_value.to_ascii_lowercase().as_str() {
-        "ga" => Ok(Solver::Ga),
-        "min-conflicts" => Ok(Solver::MinConflicts),
-        _ => Err("must be one of: ga, min-conflicts".to_owned()),
-    }
+    raw_value.parse()
 }
 
 fn parse_log_level(raw_value: &str) -> Result<log::LevelFilter, String> {

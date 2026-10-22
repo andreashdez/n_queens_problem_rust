@@ -10,24 +10,10 @@ use std::{
 
 use clap::Parser;
 use n_queens_problem::{
+    Solver,
     ga::{self, GaConfig},
     min_conflicts::{self, MinConflictsConfig},
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Solver {
-    Ga,
-    MinConflicts,
-}
-
-impl std::fmt::Display for Solver {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Ga => "ga",
-            Self::MinConflicts => "min-conflicts",
-        })
-    }
-}
 
 #[derive(Debug, Parser)]
 #[command(name = "parameter_sweep")]
@@ -270,11 +256,7 @@ fn parse_selection_strategy(raw_value: &str) -> Result<ga::SelectionStrategy, St
 }
 
 fn parse_solver(raw_value: &str) -> Result<Solver, String> {
-    match raw_value.to_ascii_lowercase().as_str() {
-        "ga" => Ok(Solver::Ga),
-        "min-conflicts" => Ok(Solver::MinConflicts),
-        _ => Err("must be one of: ga, min-conflicts".to_owned()),
-    }
+    raw_value.parse()
 }
 
 fn seed_for_offset(seed_start: u64, seed_offset: usize) -> Result<u64, String> {

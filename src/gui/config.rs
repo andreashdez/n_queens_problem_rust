@@ -2,12 +2,18 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ga::{self, GaConfig, SelectionStrategy};
+use crate::{
+    Solver,
+    ga::{self, GaConfig, SelectionStrategy},
+    min_conflicts::MinConflictsConfig,
+};
 
 /// Saved between sessions; fields missing from an older save keep their defaults.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(super) struct GuiConfig {
+    #[serde(with = "solver")]
+    pub(super) solver: Solver,
     pub(super) board_size: u16,
     pub(super) population_size: u32,
     pub(super) max_epochs: u32,
@@ -27,6 +33,7 @@ pub(super) struct GuiConfig {
 impl Default for GuiConfig {
     fn default() -> Self {
         Self {
+            solver: Solver::Ga,
             board_size: ga::DEFAULT_BOARD_SIZE,
             population_size: u32::try_from(ga::DEFAULT_POPULATION_SIZE)
                 .expect("default population fits u32"),
@@ -78,6 +85,12 @@ impl GuiConfig {
         .validated()
     }
 
+    /// Min-conflicts ignores the GA settings, which keep their defaults.
+    pub(super) const fn to_min_conflicts_config(&self) -> MinConflictsConfig {
+        MinConflictsConfig::new(self.board_size, self.max_epochs, self.seed)
+            .with_allow_unsolvable(self.allow_unsolvable)
+    }
+
     /// The local-search hybrid, useful when a board stalls near a solution.
     fn use_hybrid_values(&mut self) {
         *self = Self {
@@ -119,6 +132,16 @@ impl GuiConfig {
         };
     }
 
+    /// The min-conflicts baseline on a board the GA could not solve quickly.
+    fn use_min_conflicts_values(&mut self) {
+        *self = Self {
+            solver: Solver::MinConflicts,
+            board_size: 1_000,
+            seed: self.seed,
+            ..Self::default()
+        };
+    }
+
     const fn use_fast_demo_values(&mut self) {
         self.board_size = 8;
         self.population_size = 256;
@@ -140,15 +163,17 @@ pub(super) enum GuiPreset {
     Hybrid,
     Classic,
     LargeBoard,
+    MinConflicts,
 }
 
 impl GuiPreset {
-    pub(super) const ALL: [Self; 5] = [
+    pub(super) const ALL: [Self; 6] = [
         Self::Demo,
         Self::Default,
         Self::Hybrid,
         Self::Classic,
         Self::LargeBoard,
+        Self::MinConflicts,
     ];
 
     pub(super) const fn label(self) -> &'static str {
@@ -158,6 +183,7 @@ impl GuiPreset {
             Self::Hybrid => "Local-search hybrid · 18×18",
             Self::Classic => "Classic genetic algorithm · 18×18",
             Self::LargeBoard => "Large board · 5000×5000",
+            Self::MinConflicts => "Min-conflicts baseline · 1000×1000",
         }
     }
 
@@ -171,6 +197,7 @@ impl GuiPreset {
             Self::Hybrid => config.use_hybrid_values(),
             Self::Classic => config.use_classic_values(),
             Self::LargeBoard => config.use_large_board_values(),
+            Self::MinConflicts => config.use_min_conflicts_values(),
             Self::Default => {}
         }
         config
@@ -185,7 +212,19 @@ impl GuiPreset {
 
 impl GuiConfig {
     /// All tokens are typed numbers or fixed enum values, so no shell quoting is needed.
+    /// Min-conflicts commands leave out the GA flags, which the CLI rejects for it.
     pub(super) fn cli_command(&self) -> String {
+        let allow_unsolvable = if self.allow_unsolvable {
+            " --allow-unsolvable"
+        } else {
+            ""
+        };
+        if self.solver == Solver::MinConflicts {
+            return format!(
+                "cargo run --release --locked -- --solver min-conflicts --size {} --epochs {} --seed {}{allow_unsolvable}",
+                self.board_size, self.max_epochs, self.seed,
+            );
+        }
         format!(
             "cargo run --release --locked -- --size {} --population {} --epochs {} --seed {} --mutation-rate {} --elite-ratio {} --offspring-ratio {} --min-diversity-ratio {} --selection {} --tournament-size {} --local-search-rate {} --local-search-attempts {}{}",
             self.board_size,
@@ -200,12 +239,34 @@ impl GuiConfig {
             self.tournament_size,
             self.local_search_rate,
             self.local_search_attempts,
-            if self.allow_unsolvable {
-                " --allow-unsolvable"
-            } else {
-                ""
-            }
+            allow_unsolvable,
         )
+    }
+}
+
+/// Stored by name so the library's enum needs no serde support.
+mod solver {
+    use serde::{Deserialize, Deserializer, Serializer, de::Error};
+
+    use crate::Solver;
+
+    #[allow(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "serde's `with` attribute passes fields by reference."
+    )]
+    pub(super) fn serialize<S: Serializer>(
+        solver: &Solver,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(solver)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Solver, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        name.parse()
+            .map_err(|_| D::Error::unknown_variant(&name, &["ga", "min-conflicts"]))
     }
 }
 
@@ -274,6 +335,22 @@ mod tests {
         assert_eq!(classic.selection_strategy, SelectionStrategy::Roulette);
         assert_eq!(classic.local_search_rate, 0.0);
 
+        let baseline = GuiPreset::MinConflicts.config(42);
+        assert_eq!(baseline.solver, Solver::MinConflicts);
+        assert_eq!(baseline.board_size, 1_000);
+        assert_eq!(baseline.max_epochs, ga::DEFAULT_MAX_EPOCHS);
+        let min_conflicts = baseline.to_min_conflicts_config();
+        assert_eq!(min_conflicts.size, 1_000);
+        assert!(min_conflicts.validate().is_ok());
+        for preset in GuiPreset::ALL {
+            let expected = if preset == GuiPreset::MinConflicts {
+                Solver::MinConflicts
+            } else {
+                Solver::Ga
+            };
+            assert_eq!(preset.config(42).solver, expected);
+        }
+
         let large = GuiPreset::LargeBoard.config(42);
         assert_eq!(large.board_size, 5_000);
         assert_eq!(large.population_size, 100);
@@ -319,5 +396,17 @@ mod tests {
             assert!(tokens.windows(2).any(|pair| pair == [flag, value.as_str()]));
         }
         assert!(tokens.contains(&"--allow-unsolvable"));
+    }
+
+    #[test]
+    fn min_conflicts_command_omits_ga_flags() {
+        let mut config = GuiPreset::MinConflicts.config(7);
+        config.allow_unsolvable = true;
+        let command = config.cli_command();
+        assert_eq!(
+            command,
+            "cargo run --release --locked -- --solver min-conflicts --size 1000 --epochs 5000 --seed 7 --allow-unsolvable"
+        );
+        assert!(!command.contains("--population"));
     }
 }

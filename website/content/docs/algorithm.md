@@ -81,7 +81,7 @@ On a 4×4 board, permutation `[0, 2, 1, 3]` has two attacking pairs: columns 1 a
 2. **Repair in passes.** Each pass visits every column. An attacked queen swaps rows with the first of up to 32 random partners that lowers the number of attacking pairs.
 3. **Restart when stuck.** A pass without an improving swap starts again from a new greedy board. The best board seen is kept.
 
-Diagonal occupancy counts make each candidate swap constant-time, so a solve takes roughly linear time in the board size. `--epochs` caps the total passes across restarts. [See the measured comparison →](../benchmarks/#min-conflicts-baseline)
+Diagonal occupancy counts make each candidate swap constant-time, so a solve takes roughly linear time in the board size. `--epochs` caps the total passes across restarts. In the GUI, choose **Min-conflicts** as the solver or start from the **Min-conflicts baseline · 1000×1000** preset. [See the measured comparison →](../benchmarks/#min-conflicts-baseline)
 
 ## Why use multiple seeds?
 

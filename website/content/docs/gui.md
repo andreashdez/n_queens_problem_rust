@@ -17,13 +17,17 @@ The native GUI runs the solver in the background while you inspect the best boar
 
 ## Configure a run
 
-1. Choose a preset at the top of the controls. **Large board · 5000×5000** shows the solver at scale and usually takes one to two minutes; see [Large boards](../tuning/#large-boards) for how it was tuned.
+1. Choose a preset at the top of the controls. **Large board · 5000×5000** shows the solver at scale and usually takes one to two minutes; see [Large boards](../tuning/#large-boards) for how it was tuned. **Min-conflicts baseline · 1000×1000** runs the non-evolutionary baseline instead.
 2. Set the board size and seed. Type any whole number up to 18446744073709551615 as the seed, or click **Random**.
 3. Click **Run solver** in the top bar, or press Ctrl/Cmd+Enter, and watch the board and charts.
 
-While a run is going, the top bar shows a progress bar with the current epoch, the epoch budget, and epochs per second; a solution can end the run before the bar fills. **Cancel run** (or Escape) stops after the current epoch. When the run ends, the status next to the button reports the outcome: green when solved, amber when cancelled, out of epochs, or unsolvable.
+While a run is going, the top bar shows a progress bar with the current epoch, the epoch budget, and epochs per second (passes, for min-conflicts); a solution can end the run before the bar fills. **Cancel run** (or Escape) stops after the current epoch. When the run ends, the status next to the button reports the outcome: green when solved, amber when cancelled, out of epochs, or unsolvable.
 
-**Advanced settings** contains population/epoch budgets, mutation, parent selection, diversity, and local-search tuning. Hover over a setting for an explanation. Presets preserve the seed and reset all tuning parameters; manual changes are shown as **Custom settings**.
+**Advanced settings** contains the genetic algorithm's population/epoch budgets, mutation, parent selection, diversity, and local-search tuning. Hover over a setting for an explanation. Presets preserve the seed and reset all tuning parameters; manual changes are shown as **Custom settings**.
+
+### Choose a solver
+
+**Solver** picks the genetic algorithm or the [min-conflicts baseline](../algorithm/#a-min-conflicts-baseline), which repairs a single board with improving swaps and restarts from a new greedy board when it stalls. Min-conflicts has no population or rates, so its **Advanced settings** hold only **Max passes** and the unsolvable-board option. Its progress, outcome, metrics, and charts count repair passes instead of epochs; the current-run panel shows passes, swaps, and restarts. It solves boards in the thousands in milliseconds, so expect a run to finish almost at once.
 
 The GUI follows your system's light or dark mode. Use **System**, **Dark**, or **Light** at the right of the top bar to choose a theme yourself.
 
@@ -39,13 +43,15 @@ The compact board toolbar shows the queen and attacking-pair counts alongside th
 
 ## Compare and repeat runs
 
-Toggle the right-hand panel with **Run history** in the top bar, or drag its edge to resize or close it. **Run history** keeps the last ten completed or cancelled runs in memory for this session, including their original settings, seed, outcome, elapsed time, best board, and sampled metrics. Click a run to inspect it, or choose **A** and **B** to overlay their best-conflict curves; picking the second run switches the chart panel to **Compare A/B**. The comparison identifies matching/different seeds and warns when board sizes differ. **Rerun** restores the recorded configuration; **Copy CLI command** copies a reproducible command to run from the project directory.
+Toggle the right-hand panel with **Run history** in the top bar, or drag its edge to resize or close it. **Run history** keeps the last ten completed or cancelled runs in memory for this session, including their original settings, seed, outcome, elapsed time, best board, and sampled metrics. Click a run to inspect it, or choose **A** and **B** to overlay their best-conflict curves; picking the second run switches the chart panel to **Compare A/B**. The comparison identifies matching/different seeds and warns when board sizes differ. Runs from different solvers can be compared, with a note that a GA epoch and a min-conflicts pass are different units of work: the axis reads **Epoch / pass**, and the curves do not line up step for step. **Rerun** restores the recorded configuration; **Copy CLI command** copies a reproducible command to run from the project directory.
 
 ## Read the charts
 
 The chart panel below the board has two tabs: **Run metrics** for the run on the board and **Compare A/B** for the selected pair. Drag the panel's top edge to give the charts more or less room; the charts grow to fill it.
 
 The GUI counts conflicts as attacking pairs: two queens on the same diagonal are one pair, and a solved board has zero. The **Attacking pairs** chart plots **Best board**, the best board found so far, and **Population average**, which describes the whole current population. These are the CLI's best and average conflicts. The average so it may rise after a restart even while the best score stays unchanged. [See an annotated example](../algorithm/#an-example-of-a-stalled-run).
+
+For a min-conflicts run, a single **Attacking pairs** chart plots **Best board** and **Current board**, the board being repaired, by pass. Dashed **Restart** lines mark where the search started again from a new greedy board, which is why the current board jumps there.
 
 Hover over charts for the nearest retained sample's epoch and values. Dashed **Soft restart** lines show actual soft-restart epochs. Attacking pairs use a log scale by default so small best-board counts stay readable next to the population average; untick **Log scale** for a linear axis. Population ratios use a fixed 0–100% axis.
 
@@ -55,7 +61,7 @@ Each completed run keeps at most 1,024 metric samples, including the first and f
 
 ## Export a run
 
-**Export metrics** opens your system's save dialog and writes the run to a CSV file. If you pick an existing file, the dialog asks before replacing it. A short confirmation, or the error if writing fails, appears in the top bar. The CSV includes original settings, the stop reason and runtime, `sample` rows with retained metrics, and `restart` rows preserving retained restart locations even where metric samples were thinned. `downsampled` identifies sampled histories; sample rows include the cumulative restart count. Use CLI `--metrics-csv` when you need every epoch rather than the GUI's bounded history. Saved runs are cleared when the app closes.
+**Export metrics** opens your system's save dialog and writes the run to a CSV file. If you pick an existing file, the dialog asks before replacing it. A short confirmation, or the error if writing fails, appears in the top bar. The CSV includes original settings, the stop reason and runtime, `sample` rows with retained metrics, and `restart` rows preserving retained restart locations even where metric samples were thinned. `downsampled` identifies sampled histories; sample rows include the cumulative restart count. The `solver` column names the solver. For min-conflicts runs, `epoch` holds the pass, `current_conflicts_sum` and `swaps` are filled in, and the GA-only settings and population columns are empty. Use CLI `--metrics-csv` when you need every epoch rather than the GUI's bounded history. Saved runs are cleared when the app closes.
 
 ### Which export should I use?
 
@@ -71,7 +77,7 @@ These are different CSV schemas. Check the column headers before combining files
 
 ## Stop a run
 
-Click **Cancel run** or press Escape. Cancellation takes effect at an epoch callback; it may take time to finish the current work. Closing the window also requests cancellation. Completed and cancelled runs remain in history while the app is open.
+Click **Cancel run** or press Escape. Cancellation takes effect after the current epoch or pass; it may take time to finish the current work. Closing the window also requests cancellation. Completed and cancelled runs remain in history while the app is open.
 
 <details>
 <summary>How live updates are retained</summary>

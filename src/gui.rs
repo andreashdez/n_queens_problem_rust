@@ -12,7 +12,7 @@ use std::{
 use eframe::egui::{self, Key, KeyboardShortcut, Modifiers};
 use serde::{Deserialize, Serialize};
 
-use crate::ga::{self, EpochSnapshot};
+use crate::Solver;
 
 mod board;
 mod charts;
@@ -26,7 +26,9 @@ mod worker;
 use board::{BoardView, draw_board, draw_empty_board};
 use config::GuiConfig;
 use history::RunArchive;
-use worker::{MetricHistory, RunResult, RunningRun, WorkerMessage, spawn_solver};
+use worker::{
+    MetricHistory, Progress, RunResult, RunningRun, Snapshot, WorkerMessage, spawn_solver,
+};
 
 /// Opens the native solver interface.
 ///
@@ -35,11 +37,13 @@ use worker::{MetricHistory, RunResult, RunningRun, WorkerMessage, spawn_solver};
 pub fn run() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_title("N-Queens Solver")
             .with_inner_size([1400.0, 900.0])
             .with_min_inner_size([1000.0, 680.0]),
         ..Default::default()
     };
 
+    // The app name locates saved settings, so it stays as it was when the GA was the only solver.
     eframe::run_native(
         "N-Queens Genetic Solver",
         native_options,
@@ -52,7 +56,7 @@ struct NQueensApp {
     running: Option<RunningRun>,
     cancel_requested: bool,
     history: MetricHistory,
-    latest_snapshot: Option<EpochSnapshot>,
+    latest_snapshot: Option<Snapshot>,
     selected_queen: Option<usize>,
     result: Option<Arc<RunResult>>,
     archive: RunArchive,
@@ -191,6 +195,7 @@ impl NQueensApp {
             receiver,
             cancel,
             max_epochs: self.config.max_epochs,
+            solver: self.config.solver,
         });
         ctx.request_repaint();
     }
@@ -209,7 +214,7 @@ impl NQueensApp {
             for _ in 0..2 {
                 match running.receiver.try_recv() {
                     Ok(WorkerMessage::Snapshot(snapshot)) => {
-                        self.history.push(snapshot.metrics().clone(), false);
+                        self.history.push(snapshot.progress.clone(), false);
                         self.latest_snapshot = Some(snapshot);
                     }
                     Ok(WorkerMessage::Finished(result)) => {
@@ -276,12 +281,12 @@ impl NQueensApp {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.chart_view, ChartView::Metrics, "Run metrics")
-                .on_hover_text("Attacking pairs and population ratios of the run on the board");
+                .on_hover_text("Attacking pairs and other metrics of the run on the board");
             ui.selectable_value(&mut self.chart_view, ChartView::Comparison, "Compare A/B")
                 .on_hover_text("Best-board attacking pairs of the two runs marked A and B in run history");
             ui.separator();
             ui.checkbox(&mut self.log_conflicts, "Log scale")
-                .on_hover_text("Plot attacking pairs on a log scale so small best-board counts stay visible next to the population average.");
+                .on_hover_text("Plot attacking pairs on a log scale so small best-board counts stay visible next to larger counts.");
             ui.separator();
             ui.weak("Chart tips").on_hover_text(
                 "Drag to pan · Ctrl/Cmd + scroll to zoom · double-click to reset · click legend entries to hide them",
@@ -324,25 +329,24 @@ impl NQueensApp {
 
         self.latest_snapshot.as_ref().map(|snapshot| {
             (
-                snapshot.best_positions(),
-                snapshot.best_conflicts(),
-                snapshot.best_conflicts_sum(),
+                snapshot.best_positions.as_slice(),
+                snapshot.best_conflicts.as_slice(),
+                snapshot.best_conflicts_sum,
             )
         })
     }
 
-    fn current_metrics(&self) -> Option<(&ga::EpochMetrics, u32)> {
+    fn current_metrics(&self) -> Option<(&Progress, u32)> {
         if let Some(result) = self.display_result() {
             return result
-                .metrics
-                .epochs()
-                .last()
-                .map(|metrics| (metrics, result.best_conflicts_sum));
+                .final_progress
+                .as_ref()
+                .map(|progress| (progress, result.best_conflicts_sum));
         }
 
         self.latest_snapshot
             .as_ref()
-            .map(|snapshot| (snapshot.metrics(), snapshot.best_conflicts_sum()))
+            .map(|snapshot| (&snapshot.progress, snapshot.best_conflicts_sum))
     }
 }
 
@@ -435,6 +439,40 @@ impl eframe::App for NQueensApp {
 /// Room for the tab row and two charts at their minimum plot height.
 const CHART_PANEL_MIN_HEIGHT: f32 = 300.0;
 
+/// What the GUI calls one iteration of a solver: a GA epoch or a min-conflicts pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Step {
+    /// Capitalized, for labels and the start of a sentence.
+    title: &'static str,
+    one: &'static str,
+    many: &'static str,
+}
+
+impl Step {
+    const fn of(solver: Solver) -> Self {
+        match solver {
+            Solver::Ga => Self {
+                title: "Epoch",
+                one: "epoch",
+                many: "epochs",
+            },
+            Solver::MinConflicts => Self {
+                title: "Pass",
+                one: "pass",
+                many: "passes",
+            },
+        }
+    }
+}
+
+/// The short solver name shown in run history and comparisons.
+const fn solver_name(solver: Solver) -> &'static str {
+    match solver {
+        Solver::Ga => "GA",
+        Solver::MinConflicts => "Min-conflicts",
+    }
+}
+
 /// The one name the GUI uses for a conflict count.
 fn attacking_pairs(count: u32) -> String {
     if count == 1 {
@@ -458,6 +496,7 @@ mod tests {
     use std::sync::{atomic::AtomicBool, mpsc};
 
     use super::*;
+    use crate::ga;
 
     #[test]
     fn elapsed_time_display_rounds_without_narrowing_or_overflow() {
@@ -470,6 +509,13 @@ mod tests {
             format_ms(u128::MAX),
             "340282366920938463463374607431768211.46s"
         );
+    }
+
+    #[test]
+    fn steps_are_named_for_their_solver() {
+        assert_eq!(Step::of(Solver::Ga).title, "Epoch");
+        assert_eq!(Step::of(Solver::MinConflicts).many, "passes");
+        assert_eq!(solver_name(Solver::MinConflicts), "Min-conflicts");
     }
 
     #[test]
@@ -612,6 +658,7 @@ mod tests {
             receiver,
             cancel: Arc::new(AtomicBool::new(false)),
             max_epochs: 1,
+            solver: Solver::Ga,
         });
         app.drain_worker_messages(&egui::Context::default());
         assert!(app.running.is_none());

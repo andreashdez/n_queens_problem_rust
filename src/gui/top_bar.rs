@@ -5,12 +5,12 @@ use std::{fmt::Write as _, time::Duration};
 use eframe::egui::{self, Align, Layout, RichText, ThemePreference, Vec2};
 
 use super::{
-    NQueensApp, attacking_pairs,
+    NQueensApp, Step, attacking_pairs,
     charts::plot_value,
     palette::{Palette, Tone},
-    worker::RunResult,
+    worker::{Progress, RunResult},
 };
-use crate::ga::{self, EpochSnapshot};
+use crate::ga;
 
 const RUN_BUTTON_SIZE: Vec2 = Vec2::new(120.0, 28.0);
 
@@ -21,16 +21,17 @@ impl NQueensApp {
             let (outcome, tone) = run_outcome(&run.result);
             return (format!("Run #{} · {outcome}", run.id), Some(tone));
         }
-        if self.cancel_requested {
-            return ("Cancelling after current epoch".to_owned(), None);
-        }
-        if self.running.is_some() {
+        if let Some(running) = &self.running {
+            if self.cancel_requested {
+                let step = Step::of(running.solver);
+                return (format!("Cancelling after current {}", step.one), None);
+            }
             let text = self.latest_snapshot.as_ref().map_or_else(
                 || "Starting solver".to_owned(),
                 |snapshot| {
                     format!(
                         "Best board so far: {}",
-                        attacking_pairs(snapshot.best_conflicts_sum())
+                        attacking_pairs(snapshot.best_conflicts_sum)
                     )
                 },
             );
@@ -52,7 +53,12 @@ impl NQueensApp {
     pub(super) fn draw_top_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = Palette::of(ctx);
         ui.horizontal(|ui| {
-            if let Some(max_epochs) = self.running.as_ref().map(|running| running.max_epochs) {
+            if let Some((max_epochs, solver)) = self
+                .running
+                .as_ref()
+                .map(|running| (running.max_epochs, running.solver))
+            {
+                let step = Step::of(solver);
                 if ui
                     .add_enabled(
                         !self.cancel_requested,
@@ -63,23 +69,27 @@ impl NQueensApp {
                         })
                         .min_size(RUN_BUTTON_SIZE),
                     )
-                    .on_hover_text("Stop after the current epoch (Esc)")
+                    .on_hover_text(format!("Stop after the current {} (Esc)", step.one))
                     .clicked()
                 {
                     self.cancel_run();
                 }
                 let (fraction, text) = run_progress(
-                    self.latest_snapshot.as_ref().map(EpochSnapshot::metrics),
+                    self.latest_snapshot
+                        .as_ref()
+                        .map(|snapshot| &snapshot.progress),
                     max_epochs,
+                    step,
                 );
                 ui.add(
                     egui::ProgressBar::new(fraction)
                         .text(text)
                         .desired_width(260.0),
                 )
-                .on_hover_text(
-                    "Share of the epoch budget used; a solution can stop the run early.",
-                );
+                .on_hover_text(format!(
+                    "Share of the {} budget used; a solution can stop the run early.",
+                    step.one
+                ));
             } else if ui
                 .add(
                     egui::Button::new(RichText::new("Run solver").strong())
@@ -167,39 +177,40 @@ fn draw_theme_choice(ui: &mut egui::Ui) {
 
 fn run_outcome(result: &RunResult) -> (String, Tone) {
     let best = attacking_pairs(result.best_conflicts_sum);
-    let stop_reason = result.metrics.stop_reason();
-    if stop_reason == ga::StopReason::Cancelled {
+    let step = Step::of(result.config.solver);
+    if result.stop_reason == ga::StopReason::Cancelled {
         return (format!("Cancelled · best board has {best}"), Tone::Warning);
     }
-    if let Some(epoch) = result.metrics.solved_epoch() {
-        return (format!("Solved at epoch {epoch}"), Tone::Success);
+    if let Some(solved) = result.solved_step {
+        return (format!("Solved at {} {solved}", step.one), Tone::Success);
     }
-    if stop_reason == ga::StopReason::Unsolvable {
+    if result.stop_reason == ga::StopReason::Unsolvable {
         return ("This board size has no solution".to_owned(), Tone::Warning);
     }
     (
-        format!("Epoch limit reached · best board has {best}"),
+        format!("{} limit reached · best board has {best}", step.title),
         Tone::Warning,
     )
 }
 
-/// Share of the epoch budget used, and a label with the epoch rate once time has passed.
-fn run_progress(metrics: Option<&ga::EpochMetrics>, max_epochs: u32) -> (f32, String) {
-    let Some(metrics) = metrics else {
+/// Share of the budget used, and a label with the rate once time has passed.
+fn run_progress(progress: Option<&Progress>, max_steps: u32, step: Step) -> (f32, String) {
+    let Some(progress) = progress else {
         return (0.0, "Starting…".to_owned());
     };
-    let epoch = metrics.epoch();
-    let fraction = (plot_value(epoch) / plot_value(max_epochs.max(1))).clamp(0.0, 1.0);
-    let mut text = format!("Epoch {epoch} of {max_epochs}");
-    if let Some(ms) = u32::try_from(metrics.elapsed_ms())
+    let current = progress.step();
+    let fraction = (plot_value(current) / plot_value(max_steps.max(1))).clamp(0.0, 1.0);
+    let mut text = format!("{} {current} of {max_steps}", step.title);
+    if let Some(ms) = u32::try_from(progress.elapsed_ms())
         .ok()
         .filter(|&ms| ms > 0)
     {
-        let rate = f64::from(epoch) * 1_000.0 / f64::from(ms);
+        let rate = f64::from(current) * 1_000.0 / f64::from(ms);
+        let many = step.many;
         if rate >= 100.0 {
-            let _ = write!(text, " · {rate:.0} epochs/s");
+            let _ = write!(text, " · {rate:.0} {many}/s");
         } else {
-            let _ = write!(text, " · {rate:.1} epochs/s");
+            let _ = write!(text, " · {rate:.1} {many}/s");
         }
     }
     (fraction, text)
@@ -212,11 +223,18 @@ fn run_progress(metrics: Option<&ga::EpochMetrics>, max_epochs: u32) -> (f32, St
 )]
 mod tests {
     use super::*;
-    use crate::gui::{config::GuiConfig, worker::tests::finished_run};
+    use crate::{
+        Solver,
+        gui::{config::GuiConfig, worker::tests::finished_run},
+    };
 
     #[test]
     fn progress_reports_budget_share_and_clamps() {
-        assert_eq!(run_progress(None, 10), (0.0, "Starting…".to_owned()));
+        let epochs = Step::of(Solver::Ga);
+        assert_eq!(
+            run_progress(None, 10, epochs),
+            (0.0, "Starting…".to_owned())
+        );
         let result = finished_run(GuiConfig {
             board_size: 3,
             population_size: 4,
@@ -224,14 +242,30 @@ mod tests {
             allow_unsolvable: true,
             ..Default::default()
         });
-        let last = result.metrics.epochs().last().unwrap();
-        assert_eq!(last.epoch(), 50);
-        let (fraction, text) = run_progress(Some(last), 200);
+        let last = result.final_progress.as_ref().unwrap();
+        assert_eq!(last.step(), 50);
+        let (fraction, text) = run_progress(Some(last), 200, epochs);
         assert_eq!(fraction, 0.25);
         assert!(text.starts_with("Epoch 50 of 200"), "{text}");
         assert_eq!(text.contains("epochs/s"), last.elapsed_ms() > 0);
-        assert_eq!(run_progress(Some(last), 10).0, 1.0);
-        assert_eq!(run_progress(Some(last), 0).0, 1.0);
+        assert_eq!(run_progress(Some(last), 10, epochs).0, 1.0);
+        assert_eq!(run_progress(Some(last), 0, epochs).0, 1.0);
+
+        let passes = finished_run(GuiConfig {
+            solver: Solver::MinConflicts,
+            board_size: 3,
+            max_epochs: 40,
+            allow_unsolvable: true,
+            ..Default::default()
+        });
+        let last = passes.final_progress.as_ref().unwrap();
+        let (fraction, text) = run_progress(Some(last), 80, Step::of(Solver::MinConflicts));
+        assert_eq!(fraction, 0.5);
+        assert!(text.starts_with("Pass 40 of 80"), "{text}");
+        assert_eq!(
+            run_outcome(&passes).0,
+            "Pass limit reached · best board has 1 attacking pair"
+        );
     }
 
     #[test]
@@ -265,6 +299,17 @@ mod tests {
             run_outcome(&limited)
                 .0
                 .starts_with("Epoch limit reached · best board has")
+        );
+
+        let solved_by_repair = finished_run(GuiConfig {
+            solver: Solver::MinConflicts,
+            board_size: 8,
+            ..Default::default()
+        });
+        assert!(
+            run_outcome(&solved_by_repair)
+                .0
+                .starts_with("Solved at pass ")
         );
 
         let mut app = NQueensApp::default();

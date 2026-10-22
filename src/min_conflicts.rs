@@ -108,7 +108,8 @@ impl MinConflictsResult {
         &self.best_chromosome
     }
 
-    /// `Solved`, `EpochLimit` once the pass budget is spent, or `Unsolvable`.
+    /// `Solved`, `EpochLimit` once the pass budget is spent, `Unsolvable`, or
+    /// `Cancelled` when a progress callback asked to stop.
     #[must_use]
     pub const fn stop_reason(&self) -> StopReason {
         self.stop_reason
@@ -138,6 +139,80 @@ impl MinConflictsResult {
     }
 }
 
+/// The search state after one repair pass, or after the greedy start board for pass zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PassMetrics {
+    pass: u32,
+    current_conflicts_sum: u32,
+    best_conflicts_sum: u32,
+    swaps: u64,
+    restarts: u32,
+    last_restart_pass: Option<u32>,
+    elapsed_ms: u128,
+}
+
+impl PassMetrics {
+    #[must_use]
+    pub const fn pass(&self) -> u32 {
+        self.pass
+    }
+
+    /// Attacking pairs on the board being repaired; after a restart, the new greedy board.
+    #[must_use]
+    pub const fn current_conflicts_sum(&self) -> u32 {
+        self.current_conflicts_sum
+    }
+
+    /// Attacking pairs on the best board seen so far, across restarts.
+    #[must_use]
+    pub const fn best_conflicts_sum(&self) -> u32 {
+        self.best_conflicts_sum
+    }
+
+    /// Improving swaps applied so far.
+    #[must_use]
+    pub const fn swaps(&self) -> u64 {
+        self.swaps
+    }
+
+    /// Restarts completed so far.
+    #[must_use]
+    pub const fn restarts(&self) -> u32 {
+        self.restarts
+    }
+
+    /// The pass that ended with the most recent restart.
+    #[must_use]
+    pub const fn last_restart_pass(&self) -> Option<u32> {
+        self.last_restart_pass
+    }
+
+    #[must_use]
+    pub const fn elapsed_ms(&self) -> u128 {
+        self.elapsed_ms
+    }
+}
+
+/// Progress passed to [`solve_with_progress`] callbacks.
+#[derive(Debug, Clone)]
+pub struct PassSnapshot {
+    metrics: PassMetrics,
+    best_chromosome: Chromosome,
+}
+
+impl PassSnapshot {
+    #[must_use]
+    pub const fn metrics(&self) -> &PassMetrics {
+        &self.metrics
+    }
+
+    /// The best board seen so far, across restarts.
+    #[must_use]
+    pub const fn best_chromosome(&self) -> &Chromosome {
+        &self.best_chromosome
+    }
+}
+
 /// Searches for a solution with the configuration's seed.
 ///
 /// Boards of size 2 and 3 stop immediately as [`StopReason::Unsolvable`] unless
@@ -146,16 +221,89 @@ impl MinConflictsResult {
 /// # Errors
 /// Returns [`MinConflictsConfigError`] if [`MinConflictsConfig::validate`] rejects the configuration.
 pub fn solve(config: MinConflictsConfig) -> Result<MinConflictsResult, MinConflictsConfigError> {
+    search(config, |_, _| true)
+}
+
+/// Like [`solve`], reporting pass zero and then every completed pass.
+///
+/// Returning false from `on_pass` cancels the search after that pass. A solution
+/// takes precedence over cancellation. Progress reporting does not change the
+/// random sequence, so a run matches [`solve`] for the same configuration.
+///
+/// # Errors
+/// Returns [`MinConflictsConfigError`] if [`MinConflictsConfig::validate`] rejects the configuration.
+pub fn solve_with_progress<F>(
+    config: MinConflictsConfig,
+    mut on_pass: F,
+) -> Result<MinConflictsResult, MinConflictsConfigError>
+where
+    F: FnMut(&PassSnapshot) -> bool,
+{
+    search(config, |metrics, best_rows| {
+        on_pass(&PassSnapshot {
+            metrics,
+            best_chromosome: Chromosome::new_unchecked(best_rows.to_vec()),
+        })
+    })
+}
+
+/// Counters and the best board, kept across restarts.
+struct SearchState {
+    started_at: Instant,
+    passes: u32,
+    swaps: u64,
+    restarts: u32,
+    last_restart_pass: Option<u32>,
+    best_rows: Vec<u16>,
+    best_attacking_pairs: u64,
+}
+
+impl SearchState {
+    fn record_best(&mut self, board: &Board) {
+        if board.attacking_pairs < self.best_attacking_pairs {
+            self.best_rows.clone_from(&board.rows);
+            self.best_attacking_pairs = board.attacking_pairs;
+        }
+    }
+
+    fn metrics(&self, board: &Board) -> PassMetrics {
+        PassMetrics {
+            pass: self.passes,
+            current_conflicts_sum: pairs_u32(board.attacking_pairs),
+            best_conflicts_sum: pairs_u32(self.best_attacking_pairs),
+            swaps: self.swaps,
+            restarts: self.restarts,
+            last_restart_pass: self.last_restart_pass,
+            elapsed_ms: self.started_at.elapsed().as_millis(),
+        }
+    }
+}
+
+/// A `u16` board has at most 65,535 × 65,534 / 2 attacking pairs, which fits.
+fn pairs_u32(attacking_pairs: u64) -> u32 {
+    u32::try_from(attacking_pairs).expect("attacking pairs on a u16 board fit u32")
+}
+
+/// The search behind [`solve`] and [`solve_with_progress`]. `on_pass` receives
+/// metrics and the best rows by reference, so [`solve`] builds no snapshots.
+fn search(
+    config: MinConflictsConfig,
+    mut on_pass: impl FnMut(PassMetrics, &[u16]) -> bool,
+) -> Result<MinConflictsResult, MinConflictsConfigError> {
     config.validate()?;
 
     let started_at = Instant::now();
     let mut rng = StdRng::seed_from_u64(config.seed);
     let mut board = Board::greedy(config.size, &mut rng);
-    let mut best_rows = board.rows.clone();
-    let mut best_attacking_pairs = board.attacking_pairs;
-    let mut passes = 0;
-    let mut swaps = 0;
-    let mut restarts = 0;
+    let mut state = SearchState {
+        started_at,
+        passes: 0,
+        swaps: 0,
+        restarts: 0,
+        last_restart_pass: None,
+        best_rows: board.rows.clone(),
+        best_attacking_pairs: board.attacking_pairs,
+    };
     log::info!(
         "running min-conflicts size={} max_passes={} initial_attacking_pairs={}",
         config.size,
@@ -163,51 +311,63 @@ pub fn solve(config: MinConflictsConfig) -> Result<MinConflictsResult, MinConfli
         board.attacking_pairs,
     );
 
-    let stop_reason = if board.attacking_pairs == 0 {
-        StopReason::Solved
-    } else if !config.allow_unsolvable && matches!(config.size, 2 | 3) {
-        log::warn!("board size has no solution; use allow_unsolvable for experiments");
-        StopReason::Unsolvable
-    } else {
+    let stop_reason = 'search: {
+        let keep_going = on_pass(state.metrics(&board), &state.best_rows);
+        if board.attacking_pairs == 0 {
+            break 'search StopReason::Solved;
+        }
+        if !keep_going {
+            break 'search StopReason::Cancelled;
+        }
+        if !config.allow_unsolvable && matches!(config.size, 2 | 3) {
+            log::warn!("board size has no solution; use allow_unsolvable for experiments");
+            break 'search StopReason::Unsolvable;
+        }
+
         loop {
-            if passes == config.max_passes {
-                break StopReason::EpochLimit;
+            if state.passes == config.max_passes {
+                break 'search StopReason::EpochLimit;
             }
-            passes += 1;
+            state.passes += 1;
 
             let pass_start_pairs = board.attacking_pairs;
-            swaps += board.repair_pass(&mut rng);
-            if board.attacking_pairs < best_attacking_pairs {
-                best_rows.clone_from(&board.rows);
-                best_attacking_pairs = board.attacking_pairs;
-            }
-            if board.attacking_pairs == 0 {
-                break StopReason::Solved;
-            }
-
-            if board.attacking_pairs == pass_start_pairs {
-                restarts += 1;
+            state.swaps += board.repair_pass(&mut rng);
+            state.record_best(&board);
+            if board.attacking_pairs != 0 && board.attacking_pairs == pass_start_pairs {
+                state.restarts += 1;
+                state.last_restart_pass = Some(state.passes);
                 log::debug!(
-                    "min-conflicts restart pass={passes} attacking_pairs={}",
+                    "min-conflicts restart pass={} attacking_pairs={}",
+                    state.passes,
                     board.attacking_pairs
                 );
                 board = Board::greedy(config.size, &mut rng);
-                if board.attacking_pairs < best_attacking_pairs {
-                    best_rows.clone_from(&board.rows);
-                    best_attacking_pairs = board.attacking_pairs;
-                }
-                if board.attacking_pairs == 0 {
-                    break StopReason::Solved;
-                }
+                state.record_best(&board);
+            }
+
+            let keep_going = on_pass(state.metrics(&board), &state.best_rows);
+            if board.attacking_pairs == 0 {
+                break 'search StopReason::Solved;
+            }
+            if !keep_going {
+                break 'search StopReason::Cancelled;
             }
         }
     };
 
+    let SearchState {
+        passes,
+        swaps,
+        restarts,
+        best_rows,
+        best_attacking_pairs,
+        ..
+    } = state;
     if stop_reason == StopReason::Solved {
         log::info!("min-conflicts solved passes={passes} swaps={swaps} restarts={restarts}");
     } else {
         log::warn!(
-            "no solution found best_attacking_pairs={best_attacking_pairs} passes={passes} restarts={restarts}"
+            "no solution found best_attacking_pairs={best_attacking_pairs} passes={passes} restarts={restarts} stop_reason={stop_reason}"
         );
     }
 
@@ -419,6 +579,77 @@ mod tests {
             (first.passes(), first.swaps(), first.restarts()),
             (second.passes(), second.swaps(), second.restarts())
         );
+    }
+
+    #[test]
+    fn progress_reports_every_pass_and_matches_solve() {
+        for (size, seed) in [(1, 42), (8, 3), (18, 42), (200, 7)] {
+            let config = MinConflictsConfig::new(size, 5_000, seed);
+            let mut seen = Vec::new();
+            let result = solve_with_progress(config, |snapshot| {
+                let metrics = *snapshot.metrics();
+                assert_eq!(
+                    snapshot.best_chromosome().get_conflicts_sum(),
+                    metrics.best_conflicts_sum()
+                );
+                seen.push(metrics);
+                true
+            })
+            .unwrap();
+            let plain = solve(config).unwrap();
+            assert_eq!(
+                result.best_chromosome().get_positions(),
+                plain.best_chromosome().get_positions()
+            );
+            assert_eq!(
+                (result.passes(), result.swaps(), result.restarts()),
+                (plain.passes(), plain.swaps(), plain.restarts())
+            );
+            let passes: Vec<_> = seen.iter().map(PassMetrics::pass).collect();
+            assert_eq!(passes, (0..=result.passes()).collect::<Vec<_>>());
+            let last = seen.last().unwrap();
+            assert_eq!(last.best_conflicts_sum(), 0);
+            assert_eq!(
+                (last.swaps(), last.restarts()),
+                (result.swaps(), result.restarts())
+            );
+            assert!(
+                seen.windows(2)
+                    .all(|pair| { pair[1].best_conflicts_sum() <= pair[0].best_conflicts_sum() })
+            );
+        }
+    }
+
+    #[test]
+    fn progress_can_cancel_but_a_solution_takes_precedence() {
+        let config = MinConflictsConfig::new(3, 100, 42).with_allow_unsolvable(true);
+        for stop_after in [0, 2] {
+            let result =
+                solve_with_progress(config, |snapshot| snapshot.metrics().pass() < stop_after)
+                    .unwrap();
+            assert_eq!(result.stop_reason(), StopReason::Cancelled);
+            assert_eq!(result.passes(), stop_after);
+        }
+
+        let result = solve_with_progress(MinConflictsConfig::new(1, 10, 42), |_| false).unwrap();
+        assert_eq!(result.stop_reason(), StopReason::Solved);
+    }
+
+    #[test]
+    fn progress_marks_restart_passes() {
+        let config = MinConflictsConfig::new(3, 20, 42).with_allow_unsolvable(true);
+        let mut last = None;
+        let result = solve_with_progress(config, |snapshot| {
+            let metrics = snapshot.metrics();
+            if metrics.restarts() > last.map_or(0, |last: PassMetrics| last.restarts()) {
+                assert_eq!(metrics.last_restart_pass(), Some(metrics.pass()));
+            }
+            last = Some(*metrics);
+            true
+        })
+        .unwrap();
+        assert!(result.restarts() > 0);
+        assert_eq!(last.unwrap().restarts(), result.restarts());
     }
 
     proptest! {

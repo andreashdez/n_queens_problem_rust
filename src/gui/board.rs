@@ -204,7 +204,11 @@ pub(super) fn draw_board(
             ui.label("Coordinates are 1-based: columns left to right, rows top to bottom.");
         });
     });
-    let gutter = 28.0;
+    // Labels sit at least one label width apart, so long numbers do not collide, and the
+    // gutter fits the widest row label to the left of the board.
+    let digits = board_units(size.to_string().len());
+    let label_spacing = 7.0f32.mul_add(digits, 6.0).max(24.0);
+    let gutter = 7.0f32.mul_add(digits, 8.0).max(28.0);
     // Keep room below for the selection details so selecting a queen never resizes the board.
     let board_side = (ui.available_width() - gutter)
         .min(ui.available_height() - gutter - SELECTION_INFO_HEIGHT)
@@ -256,7 +260,12 @@ pub(super) fn draw_board(
     }
     let palette = Palette::of(ui.ctx());
     let painter = ui.painter_at(viewport);
-    let axes_painter = ui.painter_at(outer);
+    // The last column and row labels are centred on the board edge; let them overhang it.
+    let axes_painter = ui.painter_at(
+        outer
+            .with_max_x(outer.max.x + label_spacing / 2.0)
+            .with_max_y(outer.max.y + 8.0),
+    );
     let cell = rect.width() / board_units(size);
     if cell >= 6.0 {
         draw_board_cells(&painter, palette, rect, size, cell);
@@ -289,9 +298,9 @@ pub(super) fn draw_board(
     }
 
     // Keep coordinates legible on large boards, including the selected row/column.
-    let stride = cell_index((24.0 / cell).ceil()).max(1);
+    let stride = cell_index((label_spacing / cell).ceil()).max(1);
     for index in 0..size {
-        let regular = index.is_multiple_of(stride) || index == size - 1;
+        let regular = is_labelled_coordinate(index, size, stride);
         let selected_column = *selected == Some(index);
         let selected_row = selected.is_some_and(|column| usize::from(positions[column]) == index);
         let coordinate = (index + 1).to_string();
@@ -466,6 +475,12 @@ fn draw_sparse_grid(
 }
 
 /// The attacker count, so conflicts read without relying on color; "Q" when there are none.
+/// Every `stride`-th coordinate is labelled, plus the last one; a sampled label
+/// closer than `stride` to the last is dropped so the two never overlap.
+const fn is_labelled_coordinate(index: usize, size: usize, stride: usize) -> bool {
+    index + 1 == size || (index.is_multiple_of(stride) && size - 1 - index >= stride)
+}
+
 /// Longer counts get a smaller font, and labels that still overflow the queen are skipped.
 fn queen_label(attackers: u32, font_size: f32, radius: f32) -> Option<(String, f32)> {
     let label = if attackers == 0 {
@@ -597,6 +612,16 @@ mod tests {
 
     #[test]
     fn queens_show_attacker_counts_and_shrink_long_ones() {
+        let labelled = |size, stride| {
+            (0..size)
+                .filter(|&index| is_labelled_coordinate(index, size, stride))
+                .map(|index| index + 1)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(labelled(4, 1), [1, 2, 3, 4]);
+        assert_eq!(labelled(18, 2), [1, 3, 5, 7, 9, 11, 13, 15, 18]);
+        assert_eq!(labelled(1_000, 70).last_chunk(), Some(&[911, 1_000]));
+        assert_eq!(labelled(1, 5), [1]);
         let label = |attackers| queen_label(attackers, 20.0, 18.0);
         assert_eq!(label(0), Some(("Q".to_owned(), 20.0)));
         assert_eq!(label(3), Some(("3".to_owned(), 20.0)));

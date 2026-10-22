@@ -3,15 +3,22 @@ use std::{collections::VecDeque, fmt::Write as _, fs, io, path::Path, sync::Arc}
 use eframe::egui;
 
 use super::{
-    BoardView, ChartView, NQueensApp, attacking_pairs,
+    BoardView, ChartView, NQueensApp, Step, attacking_pairs,
     charts::{Chart, ChartMarker, ChartScale, ChartSeries, plot_height, plot_value},
     config::GuiConfig,
     format_ms,
     palette::Palette,
-    worker::RunResult,
+    solver_name,
+    worker::{Progress, RunResult},
 };
+use crate::Solver;
 
 const MAX_SAVED_RUNS: usize = 10;
+
+/// For min-conflicts runs, `epoch` holds the pass and the GA-only columns are empty.
+const CSV_HEADER: &str = "record_type,run_id,solver,seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,local_search_rate,local_search_attempts,allow_unsolvable,stop_reason,solved_epoch,run_elapsed_ms,retained_samples,downsampled,epoch,best_conflicts_sum,average_conflicts_sum,population_size,elapsed_ms,unique_chromosomes,diversity_ratio,epoch_mutation_rate,epoch_elite_ratio,offspring_count,local_search_improvements,stagnation_epochs,diversity_replacements,restart_count,last_restart_epoch,current_conflicts_sum,swaps";
+/// The per-sample columns, from `epoch` to `swaps`.
+const CSV_SAMPLE_COLUMNS: usize = 17;
 
 #[derive(Clone)]
 pub(super) struct SavedRun {
@@ -77,7 +84,7 @@ fn comparison_context(a: &GuiConfig, b: &GuiConfig) -> String {
     } else {
         format!("Different seeds ({} and {})", a.seed, b.seed)
     };
-    if a.board_size == b.board_size {
+    let mut context = if a.board_size == b.board_size {
         format!(
             "{seed} · Both {}×{}. Compare multiple seeds before drawing conclusions about settings.",
             a.board_size, a.board_size
@@ -87,70 +94,119 @@ fn comparison_context(a: &GuiConfig, b: &GuiConfig) -> String {
             "{seed} · Different board sizes ({} and {}): attacking-pair counts are not directly comparable.",
             a.board_size, b.board_size
         )
+    };
+    if a.solver != b.solver {
+        context.push_str(
+            " Different solvers: a GA epoch and a min-conflicts pass are different units of work, so the x axis does not line up.",
+        );
     }
+    context
+}
+
+/// A saved run's settings, as the solver uses them.
+fn draw_settings(ui: &mut egui::Ui, config: &GuiConfig) {
+    if config.solver == Solver::MinConflicts {
+        ui.label(format!(
+            "Min-conflicts · passes {} · unsolvable experiments {}",
+            config.max_epochs, config.allow_unsolvable
+        ));
+        return;
+    }
+    ui.label(format!(
+        "Population {} · epochs {} · {} selection (tournament size {})",
+        config.population_size,
+        config.max_epochs,
+        config.selection_strategy,
+        config.tournament_size
+    ));
+    ui.label(format!(
+        "Mutation {} · elite {} · offspring {} · diversity {}",
+        config.mutation_rate,
+        config.elite_ratio,
+        config.offspring_ratio,
+        config.min_diversity_ratio
+    ));
+    ui.label(format!(
+        "Local search {} · attempts {} · unsolvable experiments {}",
+        config.local_search_rate, config.local_search_attempts, config.allow_unsolvable
+    ));
 }
 
 impl SavedRun {
     fn csv(&self) -> String {
         let config = &self.result.config;
         let history = &self.result.history;
-        let metrics = &self.result.metrics;
+        let is_ga = config.solver == Solver::Ga;
+        // Min-conflicts leaves the GA's settings and population metrics blank.
+        let ga_only = |value: String| if is_ga { value } else { String::new() };
+        let optional =
+            |value: Option<u32>| value.map(|value| value.to_string()).unwrap_or_default();
         let common = [
             self.id.to_string(),
+            config.solver.to_string(),
             config.seed.to_string(),
             config.board_size.to_string(),
-            config.population_size.to_string(),
+            ga_only(config.population_size.to_string()),
             config.max_epochs.to_string(),
-            config.mutation_rate.to_string(),
-            config.elite_ratio.to_string(),
-            config.offspring_ratio.to_string(),
-            config.min_diversity_ratio.to_string(),
-            config.selection_strategy.to_string(),
-            config.tournament_size.to_string(),
-            config.local_search_rate.to_string(),
-            config.local_search_attempts.to_string(),
+            ga_only(config.mutation_rate.to_string()),
+            ga_only(config.elite_ratio.to_string()),
+            ga_only(config.offspring_ratio.to_string()),
+            ga_only(config.min_diversity_ratio.to_string()),
+            ga_only(config.selection_strategy.to_string()),
+            ga_only(config.tournament_size.to_string()),
+            ga_only(config.local_search_rate.to_string()),
+            ga_only(config.local_search_attempts.to_string()),
             config.allow_unsolvable.to_string(),
-            metrics.stop_reason().to_string(),
-            metrics
-                .solved_epoch()
-                .map(|epoch| epoch.to_string())
-                .unwrap_or_default(),
-            metrics.total_elapsed_ms().to_string(),
+            self.result.stop_reason.to_string(),
+            optional(self.result.solved_step),
+            self.result.total_elapsed_ms.to_string(),
             history.points.len().to_string(),
             history
                 .points
                 .last()
-                .is_some_and(|last| (history.points.len() as u64) < u64::from(last.epoch()) + 1)
+                .is_some_and(|last| (history.points.len() as u64) < u64::from(last.step()) + 1)
                 .to_string(),
         ];
-        let mut output = "record_type,run_id,seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,local_search_rate,local_search_attempts,allow_unsolvable,stop_reason,solved_epoch,run_elapsed_ms,retained_samples,downsampled,epoch,best_conflicts_sum,average_conflicts_sum,population_size,elapsed_ms,unique_chromosomes,diversity_ratio,epoch_mutation_rate,epoch_elite_ratio,offspring_count,local_search_improvements,stagnation_epochs,diversity_replacements,restart_count,last_restart_epoch\n".to_owned();
+        let mut output = format!("{CSV_HEADER}\n");
         for point in &history.points {
-            let values = [
-                point.epoch().to_string(),
-                point.best_conflicts_sum().to_string(),
-                point.average_conflicts_sum().to_string(),
-                point.population_size().to_string(),
-                point.elapsed_ms().to_string(),
-                point.unique_chromosomes().to_string(),
-                point.diversity_ratio().to_string(),
-                point.mutation_rate().to_string(),
-                point.elite_ratio().to_string(),
-                point.offspring_count().to_string(),
-                point.local_search_improvements().to_string(),
-                point.stagnation_epochs().to_string(),
-                point.diversity_replacements().to_string(),
-                point.restart_count().to_string(),
-                point
-                    .last_restart_epoch()
-                    .map(|epoch| epoch.to_string())
-                    .unwrap_or_default(),
-            ];
+            let values = match point {
+                Progress::Ga(metrics) => [
+                    metrics.epoch().to_string(),
+                    metrics.best_conflicts_sum().to_string(),
+                    metrics.average_conflicts_sum().to_string(),
+                    metrics.population_size().to_string(),
+                    metrics.elapsed_ms().to_string(),
+                    metrics.unique_chromosomes().to_string(),
+                    metrics.diversity_ratio().to_string(),
+                    metrics.mutation_rate().to_string(),
+                    metrics.elite_ratio().to_string(),
+                    metrics.offspring_count().to_string(),
+                    metrics.local_search_improvements().to_string(),
+                    metrics.stagnation_epochs().to_string(),
+                    metrics.diversity_replacements().to_string(),
+                    metrics.restart_count().to_string(),
+                    optional(metrics.last_restart_epoch()),
+                    String::new(),
+                    String::new(),
+                ],
+                Progress::MinConflicts(metrics) => {
+                    let mut values: [String; CSV_SAMPLE_COLUMNS] = Default::default();
+                    values[0] = metrics.pass().to_string();
+                    values[1] = metrics.best_conflicts_sum().to_string();
+                    values[4] = metrics.elapsed_ms().to_string();
+                    values[13] = metrics.restarts().to_string();
+                    values[14] = optional(metrics.last_restart_pass());
+                    values[15] = metrics.current_conflicts_sum().to_string();
+                    values[16] = metrics.swaps().to_string();
+                    values
+                }
+            };
             writeln!(output, "sample,{},{}", common.join(","), values.join(","))
                 .expect("writing to a String cannot fail");
         }
         // Preserve restart locations even when the corresponding metric sample was decimated.
         for epoch in &history.restart_epochs {
-            let mut values = vec![String::new(); 15];
+            let mut values = vec![String::new(); CSV_SAMPLE_COLUMNS];
             values[0] = epoch.to_string();
             writeln!(output, "restart,{},{}", common.join(","), values.join(","))
                 .expect("writing to a String cannot fail");
@@ -237,7 +293,7 @@ impl NQueensApp {
                         self.board_view = BoardView::default();
                         self.chart_view = ChartView::Metrics;
                     }
-                    ui.label(result.metrics.stop_reason().to_string());
+                    ui.label(result.stop_reason.to_string());
                     for (slot, name) in [(0, "A"), (1, "B")] {
                         if ui
                             .selectable_label(self.archive.compare[slot] == Some(run.id), name)
@@ -249,35 +305,15 @@ impl NQueensApp {
                     }
                 });
                 ui.label(format!(
-                    "{}×{} · seed {} · {} · {}",
+                    "{} · {}×{} · seed {} · {} · {}",
+                    solver_name(result.config.solver),
                     result.config.board_size,
                     result.config.board_size,
                     result.config.seed,
                     attacking_pairs(result.best_conflicts_sum),
-                    format_ms(result.metrics.total_elapsed_ms())
+                    format_ms(result.total_elapsed_ms)
                 ));
-                ui.collapsing("Settings", |ui| {
-                    ui.label(format!(
-                        "Population {} · epochs {} · {} selection (tournament size {})",
-                        result.config.population_size,
-                        result.config.max_epochs,
-                        result.config.selection_strategy,
-                        result.config.tournament_size
-                    ));
-                    ui.label(format!(
-                        "Mutation {} · elite {} · offspring {} · diversity {}",
-                        result.config.mutation_rate,
-                        result.config.elite_ratio,
-                        result.config.offspring_ratio,
-                        result.config.min_diversity_ratio
-                    ));
-                    ui.label(format!(
-                        "Local search {} · attempts {} · unsolvable experiments {}",
-                        result.config.local_search_rate,
-                        result.config.local_search_attempts,
-                        result.config.allow_unsolvable
-                    ));
-                });
+                ui.collapsing("Settings", |ui| draw_settings(ui, &result.config));
                 ui.horizontal_wrapped(|ui| {
                     if ui
                         .add_enabled(self.running.is_none(), egui::Button::new("Rerun"))
@@ -315,10 +351,17 @@ impl NQueensApp {
             ui.label("Mark one run A and another B in run history to compare their convergence.");
             return;
         };
+        let (solver_a, solver_b) = (a.result.config.solver, b.result.config.solver);
+        let x_label = if solver_a == solver_b {
+            Step::of(solver_a).title
+        } else {
+            "Epoch / pass"
+        };
         ui.label(comparison_context(&a.result.config, &b.result.config));
-        ui.weak(
-            "Best-board attacking pairs by epoch · sampled points · dashed lines mark restarts",
-        );
+        ui.weak(format!(
+            "Best-board attacking pairs by {} · sampled points · dashed lines mark restarts",
+            x_label.to_lowercase()
+        ));
         let colors = Palette::of(ui.ctx()).compare();
         let series: Vec<_> = [a, b]
             .iter()
@@ -331,7 +374,7 @@ impl NQueensApp {
                     .history
                     .points
                     .iter()
-                    .map(|point| (point.epoch(), plot_value(point.best_conflicts_sum())))
+                    .map(|point| (point.step(), plot_value(point.best_conflicts_sum())))
                     .collect(),
             })
             .collect();
@@ -352,6 +395,7 @@ impl NQueensApp {
             .collect();
         Chart {
             title: "Convergence",
+            x_label,
             height: plot_height(ui, 1),
             scale: ChartScale::conflicts(self.log_conflicts),
             link: None,
@@ -422,6 +466,44 @@ mod tests {
         assert!(comparison_context(&a, &b).starts_with("Different seeds"));
         b.board_size = 8;
         assert!(comparison_context(&a, &b).contains("not directly comparable"));
+        assert!(!comparison_context(&a, &b).contains("Different solvers"));
+        b.solver = Solver::MinConflicts;
+        assert!(comparison_context(&a, &b).contains("Different solvers"));
+    }
+
+    #[test]
+    fn min_conflicts_export_leaves_ga_columns_empty() {
+        let result = finished(GuiConfig {
+            solver: Solver::MinConflicts,
+            board_size: 3,
+            max_epochs: 40,
+            allow_unsolvable: true,
+            ..Default::default()
+        });
+        let run = SavedRun { id: 3, result };
+        let csv = run.csv();
+        let mut lines = csv.lines();
+        let header: Vec<_> = lines.next().unwrap().split(',').collect();
+        let mut samples = 0;
+        for line in lines {
+            let fields: Vec<_> = line.split(',').collect();
+            assert_eq!(header.len(), fields.len());
+            let row: std::collections::HashMap<_, _> =
+                header.iter().copied().zip(fields.iter().copied()).collect();
+            assert_eq!(row["solver"], "min-conflicts");
+            assert_eq!(row["max_epochs"], "40");
+            assert_eq!(row["stop_reason"], "epoch_limit");
+            for column in ["target_population", "mutation_rate", "selection_strategy"] {
+                assert_eq!(row[column], "", "{column}");
+            }
+            if row["record_type"] == "sample" {
+                samples += 1;
+                assert_eq!(row["average_conflicts_sum"], "");
+                assert!(row["current_conflicts_sum"].parse::<u32>().is_ok());
+                assert!(row["swaps"].parse::<u64>().is_ok());
+            }
+        }
+        assert_eq!(samples, run.result.history.points.len());
     }
 
     #[test]
@@ -436,8 +518,8 @@ mod tests {
         });
         let run = SavedRun { id: 7, result };
         assert!(run.result.history.points.len() <= MAX_CHART_POINTS);
-        assert_eq!(run.result.history.points.first().unwrap().epoch(), 0);
-        assert_eq!(run.result.history.points.last().unwrap().epoch(), 5_000);
+        assert_eq!(run.result.history.points.first().unwrap().step(), 0);
+        assert_eq!(run.result.history.points.last().unwrap().step(), 5_000);
         assert!(!run.result.history.restart_epochs.is_empty());
         let csv = run.csv();
         let mut lines = csv.lines();
@@ -451,6 +533,8 @@ mod tests {
                 header.iter().copied().zip(fields.iter().copied()).collect();
             assert_eq!(row["seed"], "123");
             assert_eq!(row["run_id"], "7");
+            assert_eq!(row["solver"], "ga");
+            assert_eq!(row["target_population"], "1");
             assert_eq!(row["allow_unsolvable"], "true");
             assert_eq!(row["stop_reason"], "epoch_limit");
             assert_eq!(row["downsampled"], "true");
@@ -498,9 +582,14 @@ mod tests {
             population_size: 1,
             ..Default::default()
         });
+        let baseline = finished(GuiConfig {
+            solver: Solver::MinConflicts,
+            board_size: 8,
+            ..Default::default()
+        });
         let mut app = NQueensApp::default();
         let a = app.archive.record(Arc::clone(&result));
-        let b = app.archive.record(result);
+        let b = app.archive.record(baseline);
         app.archive.compare = [Some(a), Some(b)];
         app.archive.viewed = Some(a);
         let ctx = egui::Context::default();

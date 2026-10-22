@@ -3,11 +3,11 @@
 use eframe::egui::{self, RichText};
 use rand::RngExt;
 
-use super::{NQueensApp, config::GuiPreset, format_ms, palette::Palette};
+use super::{NQueensApp, config::GuiPreset, format_ms, palette::Palette, worker::Progress};
+use crate::{Solver, ga::SelectionStrategy};
 
 /// Fits the 20 digits of the largest `u64`.
 const SEED_FIELD_WIDTH: f32 = 160.0;
-use crate::ga::SelectionStrategy;
 
 impl NQueensApp {
     pub(super) fn draw_controls(&mut self, ui: &mut egui::Ui) {
@@ -35,6 +35,14 @@ impl NQueensApp {
                 .num_columns(2)
                 .spacing([12.0, 10.0])
                 .show(ui, |ui| {
+                    ui.label("Solver");
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut self.config.solver, Solver::Ga, "Genetic algorithm")
+                            .on_hover_text("Evolve a population of boards.");
+                        ui.radio_value(&mut self.config.solver, Solver::MinConflicts, "Min-conflicts")
+                            .on_hover_text("Repair a single board with improving swaps: a fast baseline for comparison.");
+                    });
+                    ui.end_row();
                     ui.label("Board size");
                     ui.add(
                         egui::DragValue::new(&mut self.config.board_size)
@@ -59,10 +67,15 @@ impl NQueensApp {
                 });
         });
         ui.add_space(8.0);
-        ui.weak(format!(
-            "{} individuals · up to {} epochs",
-            self.config.population_size, self.config.max_epochs
-        ));
+        ui.weak(match self.config.solver {
+            Solver::Ga => format!(
+                "{} individuals · up to {} epochs",
+                self.config.population_size, self.config.max_epochs
+            ),
+            Solver::MinConflicts => {
+                format!("One board · up to {} repair passes", self.config.max_epochs)
+            }
+        });
         ui.add_space(10.0);
         egui::CollapsingHeader::new("Advanced settings")
             .default_open(false)
@@ -106,6 +119,10 @@ impl NQueensApp {
     }
 
     fn draw_advanced_controls(&mut self, ui: &mut egui::Ui) {
+        if self.config.solver == Solver::MinConflicts {
+            self.draw_min_conflicts_controls(ui);
+            return;
+        }
         ui.label("Tune search effort and exploration.");
         egui::Grid::new("search_budget")
             .num_columns(2)
@@ -190,12 +207,34 @@ impl NQueensApp {
             });
         });
         ui.separator();
+        self.draw_unsolvable_checkbox(ui);
+    }
+
+    /// Min-conflicts repairs a single board, so only its pass budget applies.
+    fn draw_min_conflicts_controls(&mut self, ui: &mut egui::Ui) {
+        ui.label("Min-conflicts has no population or rates to tune.");
+        ui.horizontal(|ui| {
+            ui.label("Max passes");
+            ui.add(
+                egui::DragValue::new(&mut self.config.max_epochs)
+                    .speed(50.0)
+                    .range(1..=u32::MAX),
+            )
+            .on_hover_text(
+                "Stop after this many repair passes, across restarts, if no solution is found.",
+            );
+        });
+        ui.separator();
+        self.draw_unsolvable_checkbox(ui);
+    }
+
+    fn draw_unsolvable_checkbox(&mut self, ui: &mut egui::Ui) {
         ui.checkbox(
             &mut self.config.allow_unsolvable,
             "Experiment on unsolvable boards",
         )
         .on_hover_text(
-            "Allow sizes 2 and 3 to evolve for experiments instead of stopping at epoch zero.",
+            "Let sizes 2 and 3 keep searching for experiments instead of stopping straight away.",
         );
     }
 
@@ -209,7 +248,7 @@ impl NQueensApp {
             .strong(),
         );
 
-        let Some((metrics, best_conflicts_sum)) = self.current_metrics() else {
+        let Some((progress, best_conflicts_sum)) = self.current_metrics() else {
             ui.label("No metrics yet.");
             return;
         };
@@ -217,31 +256,47 @@ impl NQueensApp {
         egui::Grid::new("metrics_grid")
             .num_columns(2)
             .spacing([12.0, 5.0])
-            .show(ui, |ui| {
-                metric_row(ui, "Epoch", metrics.epoch().to_string());
-                metric_row(ui, "Best attacking pairs", best_conflicts_sum.to_string());
-                metric_row(
-                    ui,
-                    "Avg attacking pairs",
-                    format!("{:.2}", metrics.average_conflicts_sum()),
-                );
-                metric_row(
-                    ui,
-                    "Diversity",
-                    format!("{:.1}%", metrics.diversity_ratio() * 100.0),
-                );
-                metric_row(ui, "Mutation", format_ratio(metrics.mutation_rate()));
-                metric_row(ui, "Elite", format_ratio(metrics.elite_ratio()));
-                metric_row(ui, "Population", metrics.population_size().to_string());
-                metric_row(ui, "Elapsed", format_ms(metrics.elapsed_ms()));
+            .show(ui, |ui| match progress {
+                Progress::Ga(metrics) => {
+                    metric_row(ui, "Epoch", metrics.epoch().to_string());
+                    metric_row(ui, "Best attacking pairs", best_conflicts_sum.to_string());
+                    metric_row(
+                        ui,
+                        "Avg attacking pairs",
+                        format!("{:.2}", metrics.average_conflicts_sum()),
+                    );
+                    metric_row(
+                        ui,
+                        "Diversity",
+                        format!("{:.1}%", metrics.diversity_ratio() * 100.0),
+                    );
+                    metric_row(ui, "Mutation", format_ratio(metrics.mutation_rate()));
+                    metric_row(ui, "Elite", format_ratio(metrics.elite_ratio()));
+                    metric_row(ui, "Population", metrics.population_size().to_string());
+                    metric_row(ui, "Elapsed", format_ms(metrics.elapsed_ms()));
+                }
+                Progress::MinConflicts(metrics) => {
+                    metric_row(ui, "Pass", metrics.pass().to_string());
+                    metric_row(ui, "Best attacking pairs", best_conflicts_sum.to_string());
+                    metric_row(
+                        ui,
+                        "Current board",
+                        metrics.current_conflicts_sum().to_string(),
+                    );
+                    metric_row(ui, "Swaps", metrics.swaps().to_string());
+                    metric_row(ui, "Restarts", metrics.restarts().to_string());
+                    metric_row(ui, "Elapsed", format_ms(metrics.elapsed_ms()));
+                }
             });
 
         if let Some(result) = self.display_result() {
             ui.add_space(6.0);
-            ui.label(format!("Final population: {}", result.population_size));
+            if let Some(population_size) = result.population_size {
+                ui.label(format!("Final population: {population_size}"));
+            }
             ui.label(format!(
                 "Total elapsed: {}",
-                format_ms(result.metrics.total_elapsed_ms())
+                format_ms(result.total_elapsed_ms)
             ));
         }
     }
