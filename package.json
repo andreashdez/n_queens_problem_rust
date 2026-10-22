@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
+    "build:gui": "trunk build --release --public-url ./ --dist public/demo && rm -f public/demo/.trunk-lock",
     "preview": "astro preview",
     "check": "astro check",
     "check:links": "python3 scripts/check-docs-links.py",

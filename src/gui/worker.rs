@@ -1,9 +1,16 @@
-//! The background solver thread and the bounded history it reports.
+//! Runs the solver and keeps the bounded history it reports.
+//!
+//! Natively the solver runs on a background thread. A browser has no threads,
+//! so there the GUI steps the solver itself for a slice of each frame.
 
 use std::{
     collections::VecDeque,
+    sync::{Arc, mpsc::TryRecvError},
+    time::Duration,
+};
+#[cfg(not(target_arch = "wasm32"))]
+use std::{
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
     },
@@ -13,15 +20,31 @@ use std::{
 use super::config::GuiConfig;
 use crate::{
     Solver,
-    ga::{self, EpochSnapshot},
-    min_conflicts::{self, PassMetrics, PassSnapshot},
+    ga::{self, GaRun, GeneticAlgorithm, chromosome::Chromosome},
+    min_conflicts::{MinConflictsSearch, PassMetrics},
 };
 
+/// How often the GUI checks a running solver: natively for its reports, on
+/// the web to give it its next slice.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) const POLL_INTERVAL: Duration = Duration::from_millis(33);
+#[cfg(target_arch = "wasm32")]
+pub(super) const POLL_INTERVAL: Duration = Duration::ZERO;
+
 pub(super) struct RunningRun {
-    pub(super) receiver: Receiver<WorkerMessage>,
-    pub(super) cancel: Arc<AtomicBool>,
+    pub(super) worker: Worker,
     pub(super) max_epochs: u32,
     pub(super) solver: Solver,
+}
+
+impl RunningRun {
+    pub(super) fn start(config: GuiConfig) -> Self {
+        Self {
+            max_epochs: config.max_epochs,
+            solver: config.solver,
+            worker: Worker::start(config),
+        }
+    }
 }
 
 pub(super) enum WorkerMessage {
@@ -85,22 +108,10 @@ pub(super) struct Snapshot {
     pub(super) best_conflicts_sum: u32,
 }
 
-impl From<&EpochSnapshot> for Snapshot {
-    fn from(snapshot: &EpochSnapshot) -> Self {
+impl Snapshot {
+    fn new(progress: Progress, best: &Chromosome) -> Self {
         Self {
-            progress: Progress::Ga(snapshot.metrics().clone()),
-            best_positions: snapshot.best_positions().to_vec(),
-            best_conflicts: snapshot.best_conflicts().to_vec(),
-            best_conflicts_sum: snapshot.best_conflicts_sum(),
-        }
-    }
-}
-
-impl From<&PassSnapshot> for Snapshot {
-    fn from(snapshot: &PassSnapshot) -> Self {
-        let best = snapshot.best_chromosome();
-        Self {
-            progress: Progress::MinConflicts(*snapshot.metrics()),
+            progress,
             best_positions: best.get_positions().to_vec(),
             best_conflicts: best.get_conflicts().to_vec(),
             best_conflicts_sum: best.get_conflicts_sum(),
@@ -177,16 +188,200 @@ impl MetricHistory {
     }
 }
 
+/// A solver run advanced one GA epoch or min-conflicts pass at a time, recording
+/// each report in its history.
+struct SolverRun {
+    config: GuiConfig,
+    history: MetricHistory,
+    state: SolverState,
+}
+
+#[allow(
+    clippy::large_enum_variant,
+    reason = "The GUI holds a single run, so boxing saves nothing."
+)]
+enum SolverState {
+    Ga {
+        algorithm: GeneticAlgorithm,
+        run: GaRun,
+    },
+    MinConflicts(MinConflictsSearch),
+}
+
+impl SolverRun {
+    /// Starts the run, which records epoch or pass zero.
+    fn start(config: GuiConfig) -> Result<Self, String> {
+        let state = match config.solver {
+            Solver::Ga => {
+                let invalid = |error: ga::GaConfigError| format!("Invalid GA config: {error}");
+                let ga_config = config.to_ga_config().map_err(invalid)?;
+                let mut algorithm = ga::build_genetic_algorithm(ga_config).map_err(invalid)?;
+                let run = algorithm.start_run(ga::RunOptions {
+                    allow_unsolvable: config.allow_unsolvable,
+                    collect_history: false,
+                    profile: false,
+                });
+                SolverState::Ga { algorithm, run }
+            }
+            Solver::MinConflicts => SolverState::MinConflicts(
+                MinConflictsSearch::new(config.to_min_conflicts_config())
+                    .map_err(|error| format!("Invalid min-conflicts config: {error}"))?,
+            ),
+        };
+        let mut run = Self {
+            config,
+            history: MetricHistory::default(),
+            state,
+        };
+        run.record(false);
+        Ok(run)
+    }
+
+    /// Runs the next epoch or pass and returns true, or returns false once the run has stopped.
+    fn step(&mut self) -> bool {
+        let stepped = match &mut self.state {
+            SolverState::Ga { algorithm, run } => algorithm.step_run(run),
+            SolverState::MinConflicts(search) => search.step(),
+        };
+        if stepped {
+            self.record(false);
+        }
+        stepped
+    }
+
+    fn cancel(&mut self) {
+        match &mut self.state {
+            SolverState::Ga { run, .. } => run.cancel(),
+            SolverState::MinConflicts(search) => search.cancel(),
+        }
+    }
+
+    /// The latest report; `None` only for a GA run with an empty population.
+    fn progress(&self) -> Option<Progress> {
+        match &self.state {
+            SolverState::Ga { run, .. } => run.metrics().epochs().last().cloned().map(Progress::Ga),
+            SolverState::MinConflicts(search) => Some(Progress::MinConflicts(search.metrics())),
+        }
+    }
+
+    fn snapshot(&self) -> Option<Snapshot> {
+        let progress = self.progress()?;
+        Some(match &self.state {
+            SolverState::Ga { algorithm, .. } => {
+                Snapshot::new(progress, algorithm.get_best_chromosome())
+            }
+            SolverState::MinConflicts(search) => {
+                Snapshot::new(progress, search.snapshot().best_chromosome())
+            }
+        })
+    }
+
+    fn record(&mut self, force: bool) {
+        if let Some(progress) = self.progress() {
+            self.history.push(progress, force);
+        }
+    }
+
+    /// The run's result; a run stopped before it finished reports [`ga::StopReason::Cancelled`].
+    fn finish(mut self) -> RunResult {
+        self.cancel();
+        self.record(true);
+        let final_progress = self.progress();
+        let Self {
+            config,
+            history,
+            state,
+        } = self;
+        match state {
+            SolverState::Ga { algorithm, run } => {
+                let metrics = run.into_metrics();
+                let best = algorithm.get_best_chromosome();
+                RunResult {
+                    config,
+                    history,
+                    stop_reason: metrics.stop_reason(),
+                    solved_step: metrics.solved_epoch(),
+                    total_elapsed_ms: metrics.total_elapsed_ms(),
+                    final_progress,
+                    best_positions: best.get_positions().to_vec(),
+                    best_conflicts: best.get_conflicts().to_vec(),
+                    best_conflicts_sum: best.get_conflicts_sum(),
+                    population_size: Some(algorithm.get_population_size()),
+                }
+            }
+            SolverState::MinConflicts(search) => {
+                let result = search.into_result();
+                let best = result.best_chromosome();
+                RunResult {
+                    config,
+                    history,
+                    stop_reason: result.stop_reason(),
+                    solved_step: (result.stop_reason() == ga::StopReason::Solved)
+                        .then_some(result.passes()),
+                    total_elapsed_ms: result.elapsed_ms(),
+                    final_progress,
+                    best_positions: best.get_positions().to_vec(),
+                    best_conflicts: best.get_conflicts().to_vec(),
+                    best_conflicts_sum: best.get_conflicts_sum(),
+                    population_size: None,
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) type Worker = ThreadWorker;
+#[cfg(target_arch = "wasm32")]
+pub(super) type Worker = SteppedWorker;
+
+/// The solver thread and the channel it reports on.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) struct ThreadWorker {
+    pub(super) receiver: Receiver<WorkerMessage>,
+    pub(super) cancel: Arc<AtomicBool>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ThreadWorker {
+    fn start(config: GuiConfig) -> Self {
+        let (receiver, cancel) = spawn_solver(config);
+        Self { receiver, cancel }
+    }
+
+    /// The thread runs the solver on its own, unlike [`SteppedWorker`].
+    #[allow(
+        clippy::unused_self,
+        reason = "A method, like SteppedWorker::advance, so the GUI calls either the same way."
+    )]
+    pub(super) const fn advance(&self) {}
+
+    pub(super) fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+
+    pub(super) fn try_recv(&self) -> Result<WorkerMessage, TryRecvError> {
+        self.receiver.try_recv()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn spawn_solver(config: GuiConfig) -> (Receiver<WorkerMessage>, Arc<AtomicBool>) {
     let (sender, receiver) = mpsc::sync_channel(1);
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_worker = Arc::clone(&cancel);
 
     thread::spawn(move || {
-        let outcome = match config.solver {
-            Solver::Ga => run_ga(config, &sender, &cancel_worker),
-            Solver::MinConflicts => run_min_conflicts(config, &sender, &cancel_worker),
-        };
+        let outcome = SolverRun::start(config).map(|mut run| {
+            loop {
+                if !report(&run, &sender, &cancel_worker) {
+                    run.cancel();
+                }
+                if !run.step() {
+                    return run.finish();
+                }
+            }
+        });
         let _ = sender.send(match outcome {
             Ok(result) => WorkerMessage::Finished(Arc::new(result)),
             Err(error) => WorkerMessage::Failed(error),
@@ -196,107 +391,79 @@ pub(super) fn spawn_solver(config: GuiConfig) -> (Receiver<WorkerMessage>, Arc<A
     (receiver, cancel)
 }
 
-/// Records a report and offers it to the GUI; false asks the solver to stop.
-fn report(
-    history: &mut MetricHistory,
-    progress: Progress,
-    snapshot: impl FnOnce() -> Snapshot,
-    sender: &SyncSender<WorkerMessage>,
-    cancel: &AtomicBool,
-) -> bool {
-    history.push(progress, false);
+/// Offers the latest report to the GUI; false asks the solver to stop.
+#[cfg(not(target_arch = "wasm32"))]
+fn report(run: &SolverRun, sender: &SyncSender<WorkerMessage>, cancel: &AtomicBool) -> bool {
     if cancel.load(Ordering::Relaxed) {
         return false;
     }
+    let Some(snapshot) = run.snapshot() else {
+        return true;
+    };
 
-    let connected = match sender.try_send(WorkerMessage::Snapshot(snapshot())) {
+    let connected = match sender.try_send(WorkerMessage::Snapshot(snapshot)) {
         Ok(()) | Err(TrySendError::Full(_)) => true,
         Err(TrySendError::Disconnected(_)) => false,
     };
     connected && !cancel.load(Ordering::Relaxed)
 }
 
-fn run_ga(
-    config: GuiConfig,
-    sender: &SyncSender<WorkerMessage>,
-    cancel: &AtomicBool,
-) -> Result<RunResult, String> {
-    let invalid = |error: ga::GaConfigError| format!("Invalid GA config: {error}");
-    let ga_config = config.to_ga_config().map_err(invalid)?;
-    let mut algorithm = ga::build_genetic_algorithm(ga_config).map_err(invalid)?;
-    let mut history = MetricHistory::default();
-    let run_metrics = algorithm.run_algorithm_with_options(
-        ga::RunOptions {
-            allow_unsolvable: config.allow_unsolvable,
-            collect_history: false,
-            profile: false,
-        },
-        |snapshot| {
-            report(
-                &mut history,
-                Progress::Ga(snapshot.metrics().clone()),
-                || Snapshot::from(snapshot),
-                sender,
-                cancel,
-            )
-        },
-    );
-
-    let final_progress = run_metrics.epochs().last().cloned().map(Progress::Ga);
-    if let Some(progress) = &final_progress {
-        history.push(progress.clone(), true);
-    }
-    let best_chromosome = algorithm.get_best_chromosome();
-    Ok(RunResult {
-        config,
-        history,
-        stop_reason: run_metrics.stop_reason(),
-        solved_step: run_metrics.solved_epoch(),
-        total_elapsed_ms: run_metrics.total_elapsed_ms(),
-        final_progress,
-        best_positions: best_chromosome.get_positions().to_vec(),
-        best_conflicts: best_chromosome.get_conflicts().to_vec(),
-        best_conflicts_sum: best_chromosome.get_conflicts_sum(),
-        population_size: Some(algorithm.get_population_size()),
-    })
+/// Steps the solver on the GUI thread, for a slice of each frame. Browsers have no threads.
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(super) struct SteppedWorker {
+    run: Option<SolverRun>,
+    messages: VecDeque<WorkerMessage>,
 }
 
-fn run_min_conflicts(
-    config: GuiConfig,
-    sender: &SyncSender<WorkerMessage>,
-    cancel: &AtomicBool,
-) -> Result<RunResult, String> {
-    let mut history = MetricHistory::default();
-    let mut final_progress = None;
-    let result = min_conflicts::solve_with_progress(config.to_min_conflicts_config(), |snapshot| {
-        let progress = Progress::MinConflicts(*snapshot.metrics());
-        final_progress = Some(progress.clone());
-        report(
-            &mut history,
-            progress,
-            || Snapshot::from(snapshot),
-            sender,
-            cancel,
-        )
-    })
-    .map_err(|error| format!("Invalid min-conflicts config: {error}"))?;
+#[cfg(any(test, target_arch = "wasm32"))]
+impl SteppedWorker {
+    /// Solver time per frame, leaving the rest of a 60 Hz frame to draw.
+    const SLICE: Duration = Duration::from_millis(10);
 
-    if let Some(progress) = &final_progress {
-        history.push(progress.clone(), true);
+    fn start(config: GuiConfig) -> Self {
+        let mut worker = Self {
+            run: None,
+            messages: VecDeque::new(),
+        };
+        match SolverRun::start(config) {
+            Ok(run) => worker.run = Some(run),
+            Err(error) => worker.messages.push_back(WorkerMessage::Failed(error)),
+        }
+        worker
     }
-    let best_chromosome = result.best_chromosome();
-    Ok(RunResult {
-        config,
-        history,
-        stop_reason: result.stop_reason(),
-        solved_step: (result.stop_reason() == ga::StopReason::Solved).then_some(result.passes()),
-        total_elapsed_ms: result.elapsed_ms(),
-        final_progress,
-        best_positions: best_chromosome.get_positions().to_vec(),
-        best_conflicts: best_chromosome.get_conflicts().to_vec(),
-        best_conflicts_sum: best_chromosome.get_conflicts_sum(),
-        population_size: None,
-    })
+
+    /// Steps the solver for one slice, then queues its latest report or its result.
+    /// Each call runs at least one epoch or pass.
+    pub(super) fn advance(&mut self) {
+        let Some(run) = &mut self.run else {
+            return;
+        };
+        let deadline = web_time::Instant::now() + Self::SLICE;
+        loop {
+            if !run.step() {
+                let result = self.run.take().expect("checked above").finish();
+                self.messages
+                    .push_back(WorkerMessage::Finished(Arc::new(result)));
+                return;
+            }
+            if web_time::Instant::now() >= deadline {
+                break;
+            }
+        }
+        if let Some(snapshot) = run.snapshot() {
+            self.messages.push_back(WorkerMessage::Snapshot(snapshot));
+        }
+    }
+
+    pub(super) fn cancel(&mut self) {
+        if let Some(run) = &mut self.run {
+            run.cancel();
+        }
+    }
+
+    pub(super) fn try_recv(&mut self) -> Result<WorkerMessage, TryRecvError> {
+        self.messages.pop_front().ok_or(TryRecvError::Empty)
+    }
 }
 
 #[cfg(test)]
@@ -316,6 +483,94 @@ pub(super) mod tests {
                 WorkerMessage::Failed(error) => panic!("{error}"),
             }
         }
+    }
+
+    /// Advances a stepped worker frame by frame until it reports a result.
+    fn stepped_run(config: GuiConfig) -> (Arc<RunResult>, usize) {
+        let mut worker = SteppedWorker::start(config);
+        let mut snapshots = 0;
+        loop {
+            worker.advance();
+            while let Ok(message) = worker.try_recv() {
+                match message {
+                    WorkerMessage::Snapshot(_) => snapshots += 1,
+                    WorkerMessage::Finished(result) => return (result, snapshots),
+                    WorkerMessage::Failed(error) => panic!("{error}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stepped_worker_matches_the_thread_worker() {
+        for config in [
+            GuiConfig {
+                board_size: 12,
+                population_size: 40,
+                max_epochs: 300,
+                ..Default::default()
+            },
+            GuiConfig {
+                solver: Solver::MinConflicts,
+                board_size: 200,
+                ..Default::default()
+            },
+        ] {
+            let expected = finished_run(config.clone());
+            let (result, _) = stepped_run(config);
+            assert_eq!(result.stop_reason, expected.stop_reason);
+            assert_eq!(result.solved_step, expected.solved_step);
+            assert_eq!(result.best_positions, expected.best_positions);
+            assert_eq!(result.best_conflicts_sum, expected.best_conflicts_sum);
+            assert_eq!(
+                result.final_progress.as_ref().map(Progress::step),
+                expected.final_progress.as_ref().map(Progress::step)
+            );
+            let steps = |history: &MetricHistory| {
+                history
+                    .points
+                    .iter()
+                    .map(Progress::step)
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(steps(&result.history), steps(&expected.history));
+        }
+    }
+
+    #[test]
+    fn stepped_worker_reports_between_slices_and_cancels() {
+        let mut worker = SteppedWorker::start(GuiConfig {
+            board_size: 3,
+            population_size: 8,
+            max_epochs: u32::MAX,
+            allow_unsolvable: true,
+            ..Default::default()
+        });
+        worker.advance();
+        assert!(matches!(worker.try_recv(), Ok(WorkerMessage::Snapshot(_))));
+        assert!(matches!(worker.try_recv(), Err(TryRecvError::Empty)));
+
+        worker.cancel();
+        worker.advance();
+        match worker.try_recv() {
+            Ok(WorkerMessage::Finished(result)) => {
+                assert_eq!(result.stop_reason, ga::StopReason::Cancelled);
+            }
+            _ => panic!("expected terminal result"),
+        }
+        // A finished worker has nothing left to run.
+        worker.advance();
+        assert!(matches!(worker.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn stepped_worker_reports_invalid_configs() {
+        let mut worker = SteppedWorker::start(GuiConfig {
+            population_size: 0,
+            ..Default::default()
+        });
+        worker.advance();
+        assert!(matches!(worker.try_recv(), Ok(WorkerMessage::Failed(_))));
     }
 
     #[test]

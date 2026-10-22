@@ -1,6 +1,6 @@
 ---
 title: "GUI guide"
-description: "Run the desktop solver, inspect conflicts, compare experiments, and export metrics."
+description: "Run the solver on the desktop or in your browser, inspect conflicts, compare experiments, and export metrics."
 ---
 
 Run the native desktop GUI:
@@ -9,7 +9,9 @@ Run the native desktop GUI:
 cargo run --release --locked --features gui --bin n_queens_gui
 ```
 
-The native GUI runs the solver in the background while you inspect the best board and follow its progress. Settings and current metrics sit on the left, the board in the middle, charts in a resizable panel below it, and run history in a collapsible panel on the right. Start with **Quick demo · 8×8**. A solved run may finish at epoch zero if its initial population already includes a solution.
+Or [open the GUI in your browser](../demo/) without installing anything. It is the same app compiled to WebAssembly; see [In the browser](#in-the-browser) for how it differs.
+
+The GUI runs the solver in the background while you inspect the best board and follow its progress. Settings and current metrics sit on the left, the board in the middle, charts in a resizable panel below it, and run history in a collapsible panel on the right. Start with **Quick demo · 8×8**. A solved run may finish at epoch zero if its initial population already includes a solution.
 
 ![N-Queens desktop GUI showing a solved 18×18 board, solver settings, run history, and conflict and population-ratio charts.](../../assets/gui-overview.jpg)
 
@@ -61,7 +63,7 @@ Each completed run keeps at most 1,024 metric samples, including the first and f
 
 ## Export a run
 
-**Export metrics** opens your system's save dialog and writes the run to a CSV file. If you pick an existing file, the dialog asks before replacing it. A short confirmation, or the error if writing fails, appears in the top bar. The CSV includes original settings, the stop reason and runtime, `sample` rows with retained metrics, and `restart` rows preserving retained restart locations even where metric samples were thinned. `downsampled` identifies sampled histories; sample rows include the cumulative restart count. The `solver` column names the solver. For min-conflicts runs, `epoch` holds the pass, `current_conflicts_sum` and `swaps` are filled in, and the GA-only settings and population columns are empty. Use CLI `--metrics-csv` when you need every epoch rather than the GUI's bounded history. Saved runs are cleared when the app closes.
+**Export metrics** opens your system's save dialog and writes the run to a CSV file. If you pick an existing file, the dialog asks before replacing it. In the browser, it downloads `n-queens-run-<id>.csv` like any other download instead. A short confirmation, or the error if writing fails, appears in the top bar. The CSV includes original settings, the stop reason and runtime, `sample` rows with retained metrics, and `restart` rows preserving retained restart locations even where metric samples were thinned. `downsampled` identifies sampled histories; sample rows include the cumulative restart count. The `solver` column names the solver. For min-conflicts runs, `epoch` holds the pass, `current_conflicts_sum` and `swaps` are filled in, and the GA-only settings and population columns are empty. Use CLI `--metrics-csv` when you need every epoch rather than the GUI's bounded history. Saved runs are cleared when the app closes.
 
 ### Which export should I use?
 
@@ -70,7 +72,7 @@ Each completed run keeps at most 1,024 metric samples, including the first and f
 | History | At most 1,024 metric samples | Every epoch, including epoch zero |
 | Restart events | Separate `restart` rows, at most 1,024 locations | No separate restart-event rows |
 | Row format | `sample` and `restart` records | One metric row per epoch |
-| Existing file | Replaces it after the save dialog confirms | Replaces the file |
+| Existing file | Replaces it after the save dialog confirms; the browser downloads a new file | Replaces the file |
 | Best use | Inspect or compare saved GUI runs | Analyze the full epoch history |
 
 These are different CSV schemas. Check the column headers before combining files.
@@ -78,6 +80,17 @@ These are different CSV schemas. Check the column headers before combining files
 ## Stop a run
 
 Click **Cancel run** or press Escape. Cancellation takes effect after the current epoch or pass; it may take time to finish the current work. Closing the window also requests cancellation. Completed and cancelled runs remain in history while the app is open.
+
+## In the browser
+
+The [browser version](../demo/) runs entirely on your machine; no runs or settings are sent anywhere. Compared with the desktop app:
+
+- **It is slower.** The page has no threads, so the solver shares one core with the interface and runs for about 10 ms of each frame. Small and medium boards still finish quickly, but **Large board · 5000×5000** takes much longer than on the desktop. Use the desktop GUI or the CLI for big experiments.
+- **Settings are saved in the browser**, in local storage for the page, rather than in the desktop app's settings. Run history is still cleared when you close the tab.
+- **Export metrics downloads** the CSV instead of opening a save dialog.
+- **Copy CLI command** copies the same command as on the desktop, to run from a checkout of the project.
+
+The same settings and seed give the same result in both versions. It needs a browser with WebAssembly and WebGL.
 
 <details>
 <summary>How live updates are retained</summary>

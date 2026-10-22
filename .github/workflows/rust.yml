@@ -24,8 +24,10 @@ jobs:
       with:
         node-version: 22
         cache: npm
-    - name: Install rustfmt and clippy
-      run: rustup component add rustfmt clippy
+    - name: Install rustfmt, clippy, and the web target
+      run: |
+        rustup component add rustfmt clippy
+        rustup target add wasm32-unknown-unknown
     - name: Cache Rust dependencies and build output
       uses: Swatinem/rust-cache@v2
       with:
@@ -34,6 +36,8 @@ jobs:
       run: cargo fmt --check
     - name: Run clippy
       run: cargo clippy --all-targets --all-features -- -D clippy::pedantic -D clippy::nursery -D warnings
+    - name: Run clippy for the web GUI
+      run: cargo clippy --lib --bins --features gui --target wasm32-unknown-unknown -- -D clippy::pedantic -D clippy::nursery -D warnings
     - name: Build
       run: cargo build --verbose
     - name: Run default-feature tests
@@ -44,6 +48,17 @@ jobs:
       run: cargo test --all-features --examples --verbose
     - name: Install docs dependencies
       run: npm ci
+    - name: Install Trunk
+      env:
+        TRUNK_VERSION: v0.22.0
+        TRUNK_SHA256: f78c1989240c56592d8cfc4df5cc27399a3ff66a3f9cc819e16f1e3d809ce7c2
+      run: |
+        curl -fsSL -o trunk.tar.gz "https://github.com/trunk-rs/trunk/releases/download/$TRUNK_VERSION/trunk-x86_64-unknown-linux-gnu.tar.gz"
+        echo "$TRUNK_SHA256  trunk.tar.gz" | sha256sum --check
+        tar -xzf trunk.tar.gz -C "$HOME/.cargo/bin" trunk
+        rm trunk.tar.gz
+    - name: Build web GUI
+      run: npm run build:gui
     - name: Check docs
       run: npm run check
     - name: Test documentation checks

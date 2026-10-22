@@ -1,0 +1,5 @@
+# Builds the GUI for the browser: `trunk serve` or `trunk build --release`.
+[build]
+target = "web/index.html"
+# `dist/` is the docs site's output.
+dist = "target/web"

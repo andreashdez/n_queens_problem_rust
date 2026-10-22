@@ -49,7 +49,7 @@ Remove `--json` to see progress logs, the text summary, and a terminal board.
 cargo run --release --locked --features gui --bin n_queens_gui
 ```
 
-Choose **Quick demo · 8×8**, then **Run solver**. Inspect queens, hover over the charts, and compare completed runs. The GUI is a native desktop application; this documentation website does not run the solver in your browser.
+Choose **Quick demo · 8×8**, then **Run solver**. Inspect queens, hover over the charts, and compare completed runs. To try it without building anything, [open the GUI in your browser](../demo/); it is slower than the desktop app on large boards.
 
 [Follow the GUI guide →](../gui/)
 

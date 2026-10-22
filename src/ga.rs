@@ -6,10 +6,9 @@
 //! parent and survivor selection, and `diversity` for refreshes and soft restarts.
 //! `config` holds the public configuration and `metrics` the run metrics.
 
-use std::time::Instant;
-
 use rand::{SeedableRng, rngs::StdRng};
 use rayon::prelude::*;
+use web_time::Instant;
 
 use self::{
     chromosome::Chromosome,
@@ -75,6 +74,54 @@ struct GeneticAlgorithmParams {
     local_search_attempts: usize,
 }
 
+/// A run in progress, advanced one epoch at a time by [`GeneticAlgorithm::step_run`].
+///
+/// Step a run only with the algorithm that started it, which holds its population.
+#[derive(Debug)]
+pub struct GaRun {
+    options: RunOptions,
+    metrics: RunMetrics,
+    started_at: Instant,
+    best_conflicts_sum: u32,
+    offspring_count: usize,
+    stagnation_reset_interval: u32,
+    stagnation_epochs: u32,
+    /// Epochs completed after epoch zero.
+    epochs_run: u32,
+    finished: bool,
+}
+
+impl GaRun {
+    #[must_use]
+    pub const fn metrics(&self) -> &RunMetrics {
+        &self.metrics
+    }
+
+    #[must_use]
+    pub const fn is_finished(&self) -> bool {
+        self.finished
+    }
+
+    /// Stops the run as [`StopReason::Cancelled`]; a stopped run keeps its stop reason.
+    pub fn cancel(&mut self) {
+        if !self.finished {
+            self.metrics.stop_reason = StopReason::Cancelled;
+            self.finish();
+        }
+    }
+
+    #[must_use]
+    pub fn into_metrics(self) -> RunMetrics {
+        self.metrics
+    }
+
+    fn finish(&mut self) {
+        self.metrics
+            .set_total_elapsed_ms(self.started_at.elapsed().as_millis());
+        self.finished = true;
+    }
+}
+
 impl GeneticAlgorithm {
     const fn new(population: Vec<Chromosome>, rng: StdRng, params: GeneticAlgorithmParams) -> Self {
         Self {
@@ -111,10 +158,6 @@ impl GeneticAlgorithm {
 
     /// Reports epoch zero and each completed epoch. Returning false requests cancellation.
     /// Known impossible boards stop after epoch zero unless `allow_unsolvable` is set.
-    #[allow(
-        clippy::too_many_lines,
-        reason = "Keep epoch ordering, profiling, cancellation, and stop decisions together in the solver loop."
-    )]
     pub fn run_algorithm_with_options<F>(
         &mut self,
         options: RunOptions,
@@ -123,42 +166,72 @@ impl GeneticAlgorithm {
     where
         F: FnMut(&EpochSnapshot) -> bool,
     {
+        let mut run = self.start_run(options);
+        loop {
+            if let Some(snapshot) = self.epoch_snapshot(&run)
+                && !on_epoch(&snapshot)
+            {
+                run.cancel();
+            }
+            if !self.step_run(&mut run) {
+                return run.into_metrics();
+            }
+        }
+    }
+
+    /// Scores the starting population and records epoch zero.
+    ///
+    /// Advance the run with [`Self::step_run`], which
+    /// [`Self::run_algorithm_with_options`] does until it stops. An empty or
+    /// already solved population stops the run here.
+    pub fn start_run(&mut self, options: RunOptions) -> GaRun {
         let started_at = Instant::now();
-        let mut run_metrics = RunMetrics {
-            profile: options.profile,
-            latest_only: !options.collect_history,
-            ..RunMetrics::default()
+        let mut run = GaRun {
+            options,
+            metrics: RunMetrics {
+                profile: options.profile,
+                latest_only: !options.collect_history,
+                ..RunMetrics::default()
+            },
+            started_at,
+            best_conflicts_sum: 0,
+            offspring_count: offspring_count_for_population(
+                self.target_population_size,
+                self.offspring_ratio,
+            ),
+            stagnation_reset_interval: stagnation_reset_interval(self.max_epoch_count),
+            stagnation_epochs: 0,
+            epochs_run: 0,
+            finished: false,
         };
 
         if self.population.is_empty() {
             log::warn!("cannot run algorithm with empty population");
-            run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
-            return run_metrics;
+            run.finish();
+            return run;
         }
 
         measure(
             options.profile,
-            &mut run_metrics.phase_timings.fitness_ns,
+            &mut run.metrics.phase_timings.fitness_ns,
             || self.calc_fitness(),
         );
         let initial_population_metrics = measure(
             options.profile,
-            &mut run_metrics.phase_timings.population_metrics_ns,
+            &mut run.metrics.phase_timings.population_metrics_ns,
             || population_metrics(&self.population),
         );
         self.update_best_chromosome(initial_population_metrics);
-        let mut best_conflicts_sum = self.get_best_chromosome().get_conflicts_sum();
-        let offspring_count =
-            offspring_count_for_population(self.target_population_size, self.offspring_ratio);
+        run.best_conflicts_sum = self.get_best_chromosome().get_conflicts_sum();
         let mut initial_record_metrics = initial_population_metrics;
-        initial_record_metrics.best_conflicts_sum = best_conflicts_sum;
-        run_metrics.record_epoch(
+        initial_record_metrics.best_conflicts_sum = run.best_conflicts_sum;
+        run.metrics.record_epoch(
             0,
             initial_record_metrics,
             EpochRecordContext {
                 mutation_rate: self.mutation_rate,
                 elite_ratio: self.elite_ratio,
-                offspring_count,
+                offspring_count: run.offspring_count,
                 local_search_improvements: 0,
                 stagnation_epochs: 0,
                 diversity_replacements: 0,
@@ -166,241 +239,225 @@ impl GeneticAlgorithm {
             },
         );
 
-        if best_conflicts_sum == 0 {
+        if run.best_conflicts_sum == 0 {
             log::info!("ga solved in initial population");
-            run_metrics.mark_solved(0);
-            run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
-            self.report_latest_epoch(&run_metrics, &mut on_epoch);
-            return run_metrics;
+            run.metrics.mark_solved(0);
+            run.finish();
         }
-
-        if !self.report_latest_epoch(&run_metrics, &mut on_epoch) {
-            run_metrics.stop_reason = StopReason::Cancelled;
-            run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
-            return run_metrics;
-        }
-
-        if !options.allow_unsolvable && matches!(self.population[0].get_positions().len(), 2 | 3) {
-            log::warn!("board size has no solution; use allow_unsolvable for experiments");
-            run_metrics.stop_reason = StopReason::Unsolvable;
-            run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
-            return run_metrics;
-        }
-
-        let progress_log_interval = epoch_progress_log_interval(self.max_epoch_count);
-        let stagnation_reset_interval = stagnation_reset_interval(self.max_epoch_count);
-        let mut stagnation_epochs = 0;
-        log::info!(
-            "running ga epochs={} population_size={} progress_log_interval={} stagnation_reset_interval={} initial_best_conflicts_sum={best_conflicts_sum} base_mutation_rate={} base_elite_ratio={} offspring_ratio={} offspring_count={} selection_strategy={} tournament_size={} local_search_rate={} local_search_attempts={}",
-            self.max_epoch_count,
-            self.get_population_size(),
-            progress_log_interval,
-            stagnation_reset_interval,
-            self.mutation_rate,
-            self.elite_ratio,
-            self.offspring_ratio,
-            offspring_count,
-            self.selection_strategy,
-            self.tournament_size,
-            self.local_search_rate,
-            self.local_search_attempts,
-        );
-
-        for epoch in 0..self.max_epoch_count {
-            let epoch_number = epoch + 1;
-
-            if stagnation_epochs >= stagnation_reset_interval {
-                let (_, reset_elite_ratio) = adaptive_ga_parameters(
-                    self.mutation_rate,
-                    self.elite_ratio,
-                    stagnation_epochs,
-                    stagnation_reset_interval,
-                );
-                run_metrics.restart_count += 1;
-                run_metrics.last_restart_epoch = Some(epoch_number);
-                let replaced_count = measure(
-                    options.profile,
-                    &mut run_metrics.phase_timings.restart_ns,
-                    || self.soft_restart_population(reset_elite_ratio),
-                );
-                measure(
-                    options.profile,
-                    &mut run_metrics.phase_timings.fitness_ns,
-                    || self.calc_fitness(),
-                );
-
-                let post_reset_population_metrics = measure(
-                    options.profile,
-                    &mut run_metrics.phase_timings.population_metrics_ns,
-                    || population_metrics(&self.population),
-                );
-                self.update_best_chromosome(post_reset_population_metrics);
-                let post_reset_best_conflicts_sum =
-                    post_reset_population_metrics.best_conflicts_sum;
-                best_conflicts_sum =
-                    best_conflicts_sum.min(self.get_best_chromosome().get_conflicts_sum());
-
-                log::info!(
-                    "ga stagnation reset epoch={epoch_number} stagnant_epochs={stagnation_epochs} replaced={replaced_count} best_conflicts_sum={post_reset_best_conflicts_sum} elite_ratio={reset_elite_ratio:.4} population_size={}",
-                    self.get_population_size(),
-                );
-
-                stagnation_epochs = 0;
-            }
-
-            let (epoch_mutation_rate, epoch_elite_ratio) = adaptive_ga_parameters(
-                self.mutation_rate,
-                self.elite_ratio,
-                stagnation_epochs,
-                stagnation_reset_interval,
-            );
-
-            measure(
-                options.profile,
-                &mut run_metrics.phase_timings.crossover_ns,
-                || self.mate_random_chromosomes(offspring_count),
-            );
-            measure(
-                options.profile,
-                &mut run_metrics.phase_timings.mutation_ns,
-                || self.mutate_population(epoch_mutation_rate, epoch_elite_ratio),
-            );
-            let local_search_improvements = measure(
-                options.profile,
-                &mut run_metrics.phase_timings.local_search_ns,
-                || self.improve_population_with_local_search(epoch_elite_ratio),
-            );
-            measure(
-                options.profile,
-                &mut run_metrics.phase_timings.survivor_selection_ns,
-                || self.select_survivors(epoch_elite_ratio),
-            );
-            measure(
-                options.profile,
-                &mut run_metrics.phase_timings.fitness_ns,
-                || self.calc_fitness(),
-            );
-
-            let mut epoch_population_metrics = measure(
-                options.profile,
-                &mut run_metrics.phase_timings.population_metrics_ns,
-                || population_metrics(&self.population),
-            );
-            let diversity_replacements = measure(
-                options.profile,
-                &mut run_metrics.phase_timings.diversity_refresh_ns,
-                || {
-                    self.refresh_low_diversity_population(
-                        epoch_elite_ratio,
-                        epoch_population_metrics.unique_chromosomes,
-                    )
-                },
-            );
-            if diversity_replacements > 0 {
-                measure(
-                    options.profile,
-                    &mut run_metrics.phase_timings.fitness_ns,
-                    || self.calc_fitness(),
-                );
-                epoch_population_metrics = measure(
-                    options.profile,
-                    &mut run_metrics.phase_timings.population_metrics_ns,
-                    || population_metrics(&self.population),
-                );
-            }
-
-            let epoch_best_conflicts_sum = epoch_population_metrics.best_conflicts_sum;
-            let population_size = epoch_population_metrics.population_size;
-
-            let is_improvement = epoch_best_conflicts_sum < best_conflicts_sum;
-            if is_improvement {
-                self.update_best_chromosome(epoch_population_metrics);
-                best_conflicts_sum = epoch_best_conflicts_sum;
-                stagnation_epochs = 0;
-            } else {
-                stagnation_epochs += 1;
-            }
-
-            let mut epoch_record_metrics = epoch_population_metrics;
-            epoch_record_metrics.best_conflicts_sum = best_conflicts_sum;
-            run_metrics.record_epoch(
-                epoch_number,
-                epoch_record_metrics,
-                EpochRecordContext {
-                    mutation_rate: epoch_mutation_rate,
-                    elite_ratio: epoch_elite_ratio,
-                    offspring_count,
-                    local_search_improvements,
-                    stagnation_epochs,
-                    diversity_replacements,
-                    elapsed_ms: started_at.elapsed().as_millis(),
-                },
-            );
-
-            if best_conflicts_sum == 0 {
-                log::info!(
-                    "ga solved epoch={epoch_number} population_size={population_size} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4} local_search_improvements={local_search_improvements}"
-                );
-                run_metrics.mark_solved(epoch_number);
-                run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
-                self.report_latest_epoch(&run_metrics, &mut on_epoch);
-                return run_metrics;
-            }
-
-            if is_improvement {
-                log::info!(
-                    "ga improvement epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4} local_search_improvements={local_search_improvements}",
-                );
-                if !self.report_latest_epoch(&run_metrics, &mut on_epoch) {
-                    run_metrics.stop_reason = StopReason::Cancelled;
-                    run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
-                    return run_metrics;
-                }
-                continue;
-            }
-
-            let is_periodic_log = epoch_number % progress_log_interval == 0;
-            let is_last_epoch = epoch_number == self.max_epoch_count;
-            if is_periodic_log || is_last_epoch {
-                log::info!(
-                    "ga progress epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} stagnant_epochs={stagnation_epochs} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4} local_search_improvements={local_search_improvements} diversity_replacements={diversity_replacements}",
-                );
-            }
-
-            if !self.report_latest_epoch(&run_metrics, &mut on_epoch) {
-                run_metrics.stop_reason = StopReason::Cancelled;
-                run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
-                return run_metrics;
-            }
-        }
-
-        log::warn!(
-            "no solution found best_conflicts_sum={best_conflicts_sum} epochs={} population_size={}",
-            self.max_epoch_count,
-            self.get_population_size(),
-        );
-
-        run_metrics.set_total_elapsed_ms(started_at.elapsed().as_millis());
-        run_metrics
+        run
     }
 
-    fn report_latest_epoch<F>(&self, run_metrics: &RunMetrics, on_epoch: &mut F) -> bool
-    where
-        F: FnMut(&EpochSnapshot) -> bool,
-    {
-        let Some(metrics) = run_metrics.epochs().last() else {
-            return true;
-        };
+    /// Runs the next epoch and returns true, or returns false once the run has stopped.
+    ///
+    /// Before the first epoch, a known impossible board stops the run as
+    /// [`StopReason::Unsolvable`] unless `allow_unsolvable` is set.
+    pub fn step_run(&mut self, run: &mut GaRun) -> bool {
+        if run.finished {
+            return false;
+        }
 
+        if run.epochs_run == 0 {
+            if !run.options.allow_unsolvable
+                && matches!(self.population[0].get_positions().len(), 2 | 3)
+            {
+                log::warn!("board size has no solution; use allow_unsolvable for experiments");
+                run.metrics.stop_reason = StopReason::Unsolvable;
+                run.finish();
+                return false;
+            }
+
+            log::info!(
+                "running ga epochs={} population_size={} progress_log_interval={} stagnation_reset_interval={} initial_best_conflicts_sum={} base_mutation_rate={} base_elite_ratio={} offspring_ratio={} offspring_count={} selection_strategy={} tournament_size={} local_search_rate={} local_search_attempts={}",
+                self.max_epoch_count,
+                self.get_population_size(),
+                epoch_progress_log_interval(self.max_epoch_count),
+                run.stagnation_reset_interval,
+                run.best_conflicts_sum,
+                self.mutation_rate,
+                self.elite_ratio,
+                self.offspring_ratio,
+                run.offspring_count,
+                self.selection_strategy,
+                self.tournament_size,
+                self.local_search_rate,
+                self.local_search_attempts,
+            );
+        }
+
+        if run.epochs_run == self.max_epoch_count {
+            log::warn!(
+                "no solution found best_conflicts_sum={} epochs={} population_size={}",
+                run.best_conflicts_sum,
+                self.max_epoch_count,
+                self.get_population_size(),
+            );
+            run.finish();
+            return false;
+        }
+
+        run.epochs_run += 1;
+        self.run_epoch(run);
+        true
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep epoch ordering, profiling, and stop decisions together."
+    )]
+    fn run_epoch(&mut self, run: &mut GaRun) {
+        let epoch_number = run.epochs_run;
+        let profile = run.options.profile;
+
+        if run.stagnation_epochs >= run.stagnation_reset_interval {
+            let (_, reset_elite_ratio) = adaptive_ga_parameters(
+                self.mutation_rate,
+                self.elite_ratio,
+                run.stagnation_epochs,
+                run.stagnation_reset_interval,
+            );
+            run.metrics.restart_count += 1;
+            run.metrics.last_restart_epoch = Some(epoch_number);
+            let replaced_count =
+                measure(profile, &mut run.metrics.phase_timings.restart_ns, || {
+                    self.soft_restart_population(reset_elite_ratio)
+                });
+            measure(profile, &mut run.metrics.phase_timings.fitness_ns, || {
+                self.calc_fitness();
+            });
+
+            let post_reset_population_metrics = measure(
+                profile,
+                &mut run.metrics.phase_timings.population_metrics_ns,
+                || population_metrics(&self.population),
+            );
+            self.update_best_chromosome(post_reset_population_metrics);
+            let post_reset_best_conflicts_sum = post_reset_population_metrics.best_conflicts_sum;
+            run.best_conflicts_sum = run
+                .best_conflicts_sum
+                .min(self.get_best_chromosome().get_conflicts_sum());
+
+            log::info!(
+                "ga stagnation reset epoch={epoch_number} stagnant_epochs={} replaced={replaced_count} best_conflicts_sum={post_reset_best_conflicts_sum} elite_ratio={reset_elite_ratio:.4} population_size={}",
+                run.stagnation_epochs,
+                self.get_population_size(),
+            );
+
+            run.stagnation_epochs = 0;
+        }
+
+        let (epoch_mutation_rate, epoch_elite_ratio) = adaptive_ga_parameters(
+            self.mutation_rate,
+            self.elite_ratio,
+            run.stagnation_epochs,
+            run.stagnation_reset_interval,
+        );
+
+        let offspring_count = run.offspring_count;
+        measure(profile, &mut run.metrics.phase_timings.crossover_ns, || {
+            self.mate_random_chromosomes(offspring_count);
+        });
+        measure(profile, &mut run.metrics.phase_timings.mutation_ns, || {
+            self.mutate_population(epoch_mutation_rate, epoch_elite_ratio);
+        });
+        let local_search_improvements = measure(
+            profile,
+            &mut run.metrics.phase_timings.local_search_ns,
+            || self.improve_population_with_local_search(epoch_elite_ratio),
+        );
+        measure(
+            profile,
+            &mut run.metrics.phase_timings.survivor_selection_ns,
+            || self.select_survivors(epoch_elite_ratio),
+        );
+        measure(profile, &mut run.metrics.phase_timings.fitness_ns, || {
+            self.calc_fitness();
+        });
+
+        let mut epoch_population_metrics = measure(
+            profile,
+            &mut run.metrics.phase_timings.population_metrics_ns,
+            || population_metrics(&self.population),
+        );
+        let diversity_replacements = measure(
+            profile,
+            &mut run.metrics.phase_timings.diversity_refresh_ns,
+            || {
+                self.refresh_low_diversity_population(
+                    epoch_elite_ratio,
+                    epoch_population_metrics.unique_chromosomes,
+                )
+            },
+        );
+        if diversity_replacements > 0 {
+            measure(profile, &mut run.metrics.phase_timings.fitness_ns, || {
+                self.calc_fitness();
+            });
+            epoch_population_metrics = measure(
+                profile,
+                &mut run.metrics.phase_timings.population_metrics_ns,
+                || population_metrics(&self.population),
+            );
+        }
+
+        let epoch_best_conflicts_sum = epoch_population_metrics.best_conflicts_sum;
+        let population_size = epoch_population_metrics.population_size;
+
+        let is_improvement = epoch_best_conflicts_sum < run.best_conflicts_sum;
+        if is_improvement {
+            self.update_best_chromosome(epoch_population_metrics);
+            run.best_conflicts_sum = epoch_best_conflicts_sum;
+            run.stagnation_epochs = 0;
+        } else {
+            run.stagnation_epochs += 1;
+        }
+
+        let best_conflicts_sum = run.best_conflicts_sum;
+        let stagnation_epochs = run.stagnation_epochs;
+        let mut epoch_record_metrics = epoch_population_metrics;
+        epoch_record_metrics.best_conflicts_sum = best_conflicts_sum;
+        run.metrics.record_epoch(
+            epoch_number,
+            epoch_record_metrics,
+            EpochRecordContext {
+                mutation_rate: epoch_mutation_rate,
+                elite_ratio: epoch_elite_ratio,
+                offspring_count,
+                local_search_improvements,
+                stagnation_epochs,
+                diversity_replacements,
+                elapsed_ms: run.started_at.elapsed().as_millis(),
+            },
+        );
+
+        if best_conflicts_sum == 0 {
+            log::info!(
+                "ga solved epoch={epoch_number} population_size={population_size} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4} local_search_improvements={local_search_improvements}"
+            );
+            run.metrics.mark_solved(epoch_number);
+            run.finish();
+        } else if is_improvement {
+            log::info!(
+                "ga improvement epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4} local_search_improvements={local_search_improvements}",
+            );
+        } else if epoch_number.is_multiple_of(epoch_progress_log_interval(self.max_epoch_count))
+            || epoch_number == self.max_epoch_count
+        {
+            log::info!(
+                "ga progress epoch={epoch_number} best_conflicts_sum={best_conflicts_sum} population_size={population_size} stagnant_epochs={stagnation_epochs} mutation_rate={epoch_mutation_rate:.4} elite_ratio={epoch_elite_ratio:.4} local_search_improvements={local_search_improvements} diversity_replacements={diversity_replacements}",
+            );
+        }
+    }
+
+    /// The latest epoch with the best board so far; `None` before epoch zero is recorded.
+    pub fn epoch_snapshot(&self, run: &GaRun) -> Option<EpochSnapshot> {
+        let metrics = run.metrics.epochs().last()?;
         let best_chromosome = self.get_best_chromosome();
-        let snapshot = EpochSnapshot {
+        Some(EpochSnapshot {
             metrics: metrics.clone(),
             best_positions: best_chromosome.get_positions().to_vec(),
             best_conflicts: best_chromosome.get_conflicts().to_vec(),
             best_conflicts_sum: best_chromosome.get_conflicts_sum(),
-        };
-
-        on_epoch(&snapshot)
+        })
     }
 
     pub fn get_best_chromosome(&self) -> &Chromosome {
@@ -682,6 +739,34 @@ mod tests {
                 assert_eq!(result.epochs().last().unwrap().epoch(), stop_at);
             }
         }
+    }
+
+    #[test]
+    fn stepping_a_run_matches_running_it_to_completion() {
+        use super::{RunOptions, StopReason};
+        let config = GaConfig::new(12, 40, 300, 7);
+        let mut expected_algorithm = build_genetic_algorithm(config).unwrap();
+        let expected = expected_algorithm.run_algorithm();
+
+        let mut algorithm = build_genetic_algorithm(config).unwrap();
+        let mut run = algorithm.start_run(RunOptions::default());
+        let mut steps = 0;
+        while algorithm.step_run(&mut run) {
+            steps += 1;
+        }
+        assert!(run.is_finished());
+        assert!(!algorithm.step_run(&mut run));
+        // Cancelling a stopped run keeps its stop reason.
+        run.cancel();
+        let metrics = run.into_metrics();
+        assert_ne!(metrics.stop_reason(), StopReason::Cancelled);
+        assert_eq!(metrics.stop_reason(), expected.stop_reason());
+        assert_eq!(metrics.solved_epoch(), expected.solved_epoch());
+        assert_eq!(metrics.epochs().last().unwrap().epoch(), steps);
+        assert_eq!(
+            algorithm.get_best_chromosome().get_positions(),
+            expected_algorithm.get_best_chromosome().get_positions()
+        );
     }
 
     #[test]
