@@ -1,6 +1,8 @@
-# Measurements from 2026-09-14
+# Benchmark measurements
 
-These measurements cover 18×18 boards on this machine: macOS/aarch64, eight Rayon threads, Rust 1.98.1, release builds with the updated lockfile. They compare the current solver with a 200-epoch budget. They do not establish optimal settings for other board sizes or machines.
+Most of this report covers the GA measurements from 2026-09-14. A later comparison with the min-conflicts baseline is [at the end](#min-conflicts-baseline-2026-10-22).
+
+The 2026-09-14 measurements cover 18×18 boards on this machine: macOS/aarch64, eight Rayon threads, Rust 1.98.1, release builds with the updated lockfile. They compare the current solver with a 200-epoch budget. They do not establish optimal settings for other board sizes or machines.
 
 They replace the 2026-09-12 measurements, which described the solver before the epoch-loop optimizations below. Those per-seed results no longer reproduce and were removed; `git log` still has them.
 
@@ -172,3 +174,40 @@ The Criterion run used the same solver/harness source as the profile snapshot, w
 ```bash
 cargo bench --locked --bench ga --features bench-internals -- --warm-up-time 0.2 --measurement-time 0.5 --sample-size 10
 ```
+
+## Min-conflicts baseline (2026-10-22)
+
+`--solver min-conflicts` adds a non-evolutionary local search as a reference point for the GA. These runs used macOS/aarch64 (Apple M2), eight Rayon threads, Rust 1.99.1, and release builds. The sources were captured while the change was uncommitted, so `metadata.json` records commit `381a8ec` with a dirty tree and the archived source carries the solvers under test. Every run used seeds 101–120 and a 5,000-epoch (or pass) budget; the GA used the shipped defaults, passed explicitly.
+
+| Board | GA solved | GA median | Min-conflicts solved | Min-conflicts median | Min-conflicts median passes |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | 20/20 | 0.14 ms | 20/20 | 0.003 ms | 2 |
+| 18 | 20/20 | 5.4 ms | 20/20 | 0.007 ms | 4.5 |
+| 32 | 20/20 | 10.9 ms | 20/20 | 0.010 ms | 7 |
+| 64 | 20/20 | 32.2 ms | 20/20 | 0.011 ms | 5 |
+| 100 | 20/20 | 49.9 ms | 20/20 | 0.021 ms | 6 |
+| 1,000 | — | — | 20/20 | 0.16 ms | 13 |
+| 10,000 | — | — | 20/20 | 2.5 ms | 35.5 |
+| 65,535 | — | — | 20/20 | 13.9 ms | 39 |
+
+Medians come from the per-seed `elapsed_ns` in `runs.jsonl`; `summary.csv` rounds runtime to whole milliseconds. The GA was not run above N=100. Min-conflicts restarted at most 15 times in any run, and its slowest run, at N=65,535, took 50.3 ms. For all 200 runs in the first sweep, the solved epoch and stop reason match the CLI for the same seed, so the sweep and the CLI run the same search.
+
+- [Both solvers, sizes 8–100](2026-10-22-baseline/summary.csv): 200 runs.
+- [Min-conflicts, sizes 1,000–65,535](2026-10-22-baseline-large/summary.csv): 60 runs.
+
+```bash
+cargo run --release --locked --example parameter_sweep -- \
+  --solvers ga,min-conflicts --sizes 8,18,32,64,100 --populations 500 --epochs 5000 \
+  --seed-start 101 --seeds 20 \
+  --mutation-rates 0.16 --elite-ratios 0.10 --offspring-ratios 0.50 --min-diversity-ratios 0.10 \
+  --selection-strategies tournament --tournament-sizes 3 \
+  --local-search-rates 0 --local-search-attempts 8 \
+  --output-dir baseline-new
+cargo run --release --locked --example parameter_sweep -- \
+  --solvers min-conflicts --sizes 1000,10000,65535 --epochs 5000 \
+  --seed-start 101 --seeds 20 \
+  --output-dir baseline-large-new
+```
+
+These archives use sweep `schema_version` 2: `summary.csv` gains a leading `solver` column with the GA parameter columns empty for min-conflicts rows, and each `runs.jsonl` config records its `solver`. Min-conflicts records add `passes`, `swaps`, and `restarts`.
+

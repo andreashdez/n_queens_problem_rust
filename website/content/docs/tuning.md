@@ -86,11 +86,11 @@ cargo run --release --locked --example parameter_sweep -- \
   --output-dir sweep-results
 ```
 
-- `runs.jsonl`: one flushed record per completed seed, with full GA configuration, stop reason, solved epoch, remaining conflicts, and elapsed nanoseconds/milliseconds.
-- `summary.csv`: the same aggregates printed to stdout, written after each configuration.
+- `runs.jsonl`: one flushed record per completed seed, with the solver and its full configuration, stop reason, solved epoch, remaining conflicts, and elapsed nanoseconds/milliseconds. Min-conflicts records add passes, swaps, and restarts.
+- `summary.csv`: the same aggregates printed to stdout, written after each configuration. The first column names the solver.
 - `metadata.json`: seed range, command arguments, Git revision/status, compiler, OS/architecture, available CPUs, actual Rayon thread count, build mode, and profiling setting.
 - `source/` and `source.patch`: workspace Rust sources, Cargo manifest/lockfile, toolchain file, and tracked changes at experiment start. Use `cargo run` from the matching source tree so the binary matches this snapshot. Identical seeds alone do not promise identical results across dependency/toolchain changes.
 
-The directory must not already exist and must be outside `src`, `examples`, `benches`, and `tests`. Use `--seed-start` for independent validation seeds and `--profile` to include phase timings in each seed record. Interrupted sweeps retain completed seed records even if the current configuration has no aggregate yet. Runtime aggregates include unsolved runs; median solved epoch includes only solved runs. Elapsed time includes population construction.
+Add `--solvers ga,min-conflicts` to run the [min-conflicts baseline](../algorithm/#a-min-conflicts-baseline) on the same sizes, epoch budgets, and seeds; the GA parameter lists apply only to `ga`. The directory must not already exist and must be outside `src`, `examples`, `benches`, and `tests`. Use `--seed-start` for independent validation seeds and `--profile` to include phase timings in each seed record. Interrupted sweeps retain completed seed records even if the current configuration has no aggregate yet. Runtime aggregates include unsolved runs; median solved epoch includes only solved runs. Elapsed time includes population construction.
 
 [Compare measured N=18 presets →](../benchmarks/) · [Look up CLI defaults →](../cli/#cli-options)

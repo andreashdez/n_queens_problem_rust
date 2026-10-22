@@ -9,15 +9,44 @@ use std::{
 };
 
 use clap::Parser;
-use n_queens_problem::ga::{self, GaConfig};
+use n_queens_problem::{
+    ga::{self, GaConfig},
+    min_conflicts::{self, MinConflictsConfig},
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Solver {
+    Ga,
+    MinConflicts,
+}
+
+impl std::fmt::Display for Solver {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Ga => "ga",
+            Self::MinConflicts => "min-conflicts",
+        })
+    }
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "parameter_sweep")]
-#[command(about = "Run N-Queens GA parameter sweeps across multiple seeds")]
+#[command(
+    about = "Run N-Queens GA parameter sweeps, or the min-conflicts baseline, across multiple seeds"
+)]
 #[command(
     after_help = "Example:\n  cargo run --release --example parameter_sweep -- --sizes 18 --populations 40000 --epochs 5000 --seeds 20 --mutation-rates 0.06,0.08 --elite-ratios 0.05,0.10 --offspring-ratios 0.05,0.10 --min-diversity-ratios 0.05,0.10 --selection-strategies roulette,tournament --tournament-sizes 3,5 --local-search-rates 0,0.05 --local-search-attempts 8"
 )]
 struct SweepConfig {
+    #[arg(
+        long = "solvers",
+        value_name = "SOLVER[,SOLVER]",
+        value_delimiter = ',',
+        default_value = "ga",
+        value_parser = parse_solver,
+        help = "Solvers to test: ga, min-conflicts. GA parameter lists apply only to ga"
+    )]
+    solvers: Vec<Solver>,
     #[arg(
         short = 'n',
         long = "sizes",
@@ -45,7 +74,7 @@ struct SweepConfig {
         value_delimiter = ',',
         default_value = "5000",
         value_parser = parse_positive_u32,
-        help = "Maximum epoch counts to test"
+        help = "Maximum epoch counts to test (repair passes for min-conflicts)"
     )]
     epochs: Vec<u32>,
     #[arg(
@@ -144,6 +173,14 @@ struct SweepConfig {
     profile: bool,
 }
 
+/// Counters that only the min-conflicts baseline reports.
+#[derive(Debug, Clone, Copy)]
+struct RepairCounts {
+    passes: u32,
+    swaps: u64,
+    restarts: u32,
+}
+
 struct SweepRun {
     seed: u64,
     stop_reason: ga::StopReason,
@@ -152,6 +189,7 @@ struct SweepRun {
     solved_epoch: Option<u32>,
     elapsed_ms: u128,
     best_conflicts_sum: u32,
+    repair: Option<RepairCounts>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -231,6 +269,14 @@ fn parse_selection_strategy(raw_value: &str) -> Result<ga::SelectionStrategy, St
     }
 }
 
+fn parse_solver(raw_value: &str) -> Result<Solver, String> {
+    match raw_value.to_ascii_lowercase().as_str() {
+        "ga" => Ok(Solver::Ga),
+        "min-conflicts" => Ok(Solver::MinConflicts),
+        _ => Err("must be one of: ga, min-conflicts".to_owned()),
+    }
+}
+
 fn seed_for_offset(seed_start: u64, seed_offset: usize) -> Result<u64, String> {
     let seed_offset =
         u64::try_from(seed_offset).map_err(|_| "seed offset does not fit into u64".to_owned())?;
@@ -269,6 +315,36 @@ fn run_single_seed(
         solved_epoch: metrics.solved_epoch(),
         elapsed_ms: elapsed.as_millis(),
         best_conflicts_sum: algorithm.get_best_chromosome().get_conflicts_sum(),
+        repair: None,
+    })
+}
+
+fn run_min_conflicts_seed(
+    size: u16,
+    epochs: u32,
+    seed: u64,
+    allow_unsolvable: bool,
+) -> Result<SweepRun, min_conflicts::MinConflictsConfigError> {
+    let config =
+        MinConflictsConfig::new(size, epochs, seed).with_allow_unsolvable(allow_unsolvable);
+
+    let started_at = Instant::now();
+    let result = min_conflicts::solve(config)?;
+    let elapsed = started_at.elapsed();
+
+    Ok(SweepRun {
+        seed,
+        stop_reason: result.stop_reason(),
+        elapsed_ns: elapsed.as_nanos(),
+        phase_timings: None,
+        solved_epoch: (result.stop_reason() == ga::StopReason::Solved).then_some(result.passes()),
+        elapsed_ms: elapsed.as_millis(),
+        best_conflicts_sum: result.best_chromosome().get_conflicts_sum(),
+        repair: Some(RepairCounts {
+            passes: result.passes(),
+            swaps: result.swaps(),
+            restarts: result.restarts(),
+        }),
     })
 }
 
@@ -308,7 +384,8 @@ fn format_optional(value: Option<f64>) -> String {
     value.map(|value| format!("{value:.1}")).unwrap_or_default()
 }
 
-fn summary_row(case: SweepCase, runs: &[SweepRun]) -> String {
+/// The outcome columns shared by every solver's summary row.
+fn outcome_columns(runs: &[SweepRun]) -> String {
     let solved_count = runs.iter().filter(|run| run.solved_epoch.is_some()).count();
     #[allow(
         clippy::cast_precision_loss,
@@ -332,28 +409,44 @@ fn summary_row(case: SweepCase, runs: &[SweepRun]) -> String {
         .map(|run| run.best_conflicts_sum)
         .collect::<Vec<_>>();
 
-    let size = case.size;
-    let population = case.population;
-    let epochs = case.epochs;
-    let mutation_rate = case.mutation_rate;
-    let elite_ratio = case.elite_ratio;
-    let offspring_ratio = case.offspring_ratio;
-    let min_diversity_ratio = case.min_diversity_ratio;
-    let selection_strategy = case.selection_strategy;
-    let tournament_size = case.tournament_size;
-    let local_search_rate = case.local_search_rate;
-    let local_search_attempts = case.local_search_attempts;
     let seed_count = runs.len();
     let median_solved_epoch = format_optional(median_u32(&mut solved_epochs));
     let median_elapsed_ms = format_optional(median_u128(&mut elapsed_values));
     let best_conflicts_median = format_optional(median_u32(&mut best_conflicts));
 
     format!(
-        "{size},{population},{epochs},{mutation_rate:.6},{elite_ratio:.6},{offspring_ratio:.6},{min_diversity_ratio:.6},{selection_strategy},{tournament_size},{local_search_rate:.6},{local_search_attempts},{seed_count},{solved_count},{solve_rate:.3},{median_solved_epoch},{median_elapsed_ms},{total_elapsed_ms},{best_conflicts_median},{best_conflicts_min}",
+        "{seed_count},{solved_count},{solve_rate:.3},{median_solved_epoch},{median_elapsed_ms},{total_elapsed_ms},{best_conflicts_median},{best_conflicts_min}",
     )
 }
 
-const SUMMARY_HEADER: &str = "size,population,epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,local_search_rate,local_search_attempts,seeds,solved,solve_rate,median_solved_epoch,median_elapsed_ms,total_elapsed_ms,best_conflicts_median,best_conflicts_min";
+fn summary_row(case: SweepCase, runs: &[SweepRun]) -> String {
+    let SweepCase {
+        size,
+        population,
+        epochs,
+        mutation_rate,
+        elite_ratio,
+        offspring_ratio,
+        min_diversity_ratio,
+        selection_strategy,
+        tournament_size,
+        local_search_rate,
+        local_search_attempts,
+    } = case;
+    let outcome = outcome_columns(runs);
+
+    format!(
+        "ga,{size},{population},{epochs},{mutation_rate:.6},{elite_ratio:.6},{offspring_ratio:.6},{min_diversity_ratio:.6},{selection_strategy},{tournament_size},{local_search_rate:.6},{local_search_attempts},{outcome}",
+    )
+}
+
+/// A min-conflicts row leaves the GA parameter columns empty.
+fn min_conflicts_summary_row(size: u16, epochs: u32, runs: &[SweepRun]) -> String {
+    let outcome = outcome_columns(runs);
+    format!("min-conflicts,{size},,{epochs},,,,,,,,,{outcome}")
+}
+
+const SUMMARY_HEADER: &str = "solver,size,population,epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,local_search_rate,local_search_attempts,seeds,solved,solve_rate,median_solved_epoch,median_elapsed_ms,total_elapsed_ms,best_conflicts_median,best_conflicts_min";
 
 fn command_output(program: &str, args: &[&str]) -> Option<String> {
     let output = Command::new(program)
@@ -383,7 +476,7 @@ impl Artifacts {
             }
         }
         let metadata = json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "started_unix_seconds": SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
             "git_commit": command_output("git", &["rev-parse", "HEAD"]),
             "git_status": command_output("git", &["status", "--porcelain"]),
@@ -404,7 +497,7 @@ impl Artifacts {
             "seed_count": config.seed_count,
             "allow_unsolvable": config.allow_unsolvable,
             "profile": config.profile,
-            "timing_scope": "elapsed_ns/ms include population construction; phase timings exclude it",
+            "timing_scope": "elapsed_ns/ms include GA population construction or the min-conflicts greedy start board; phase timings exclude it",
             "source_snapshot": "source/ contains current workspace Rust sources and lockfile; run via cargo run so they match the binary",
         });
         serde_json::to_writer_pretty(File::create(path.join("metadata.json"))?, &metadata)?;
@@ -439,30 +532,42 @@ impl Artifacts {
         Ok(Self { runs, summary })
     }
 
-    fn record(
-        &mut self,
-        case: SweepCase,
-        run: &SweepRun,
-        options: ga::RunOptions,
-    ) -> io::Result<()> {
-        let row = json!({
-            "config": {
-                "size": case.size, "population": case.population, "epochs": case.epochs,
-                "mutation_rate": case.mutation_rate, "elite_ratio": case.elite_ratio,
-                "offspring_ratio": case.offspring_ratio, "min_diversity_ratio": case.min_diversity_ratio,
-                "selection_strategy": case.selection_strategy.to_string(), "tournament_size": case.tournament_size,
-                "local_search_rate": case.local_search_rate, "local_search_attempts": case.local_search_attempts,
-                "allow_unsolvable": options.allow_unsolvable,
-            },
+    fn record(&mut self, config: &serde_json::Value, run: &SweepRun) -> io::Result<()> {
+        let mut row = json!({
+            "config": config,
             "seed": run.seed, "stop_reason": run.stop_reason.to_string(),
             "solved_epoch": run.solved_epoch, "best_conflicts_sum": run.best_conflicts_sum,
             "elapsed_ns": run.elapsed_ns, "elapsed_ms": run.elapsed_ms,
             "phase_timings": run.phase_timings.as_ref().map(ga::PhaseTimings::to_json),
         });
+        if let Some(repair) = run.repair {
+            row["passes"] = json!(repair.passes);
+            row["swaps"] = json!(repair.swaps);
+            row["restarts"] = json!(repair.restarts);
+        }
         serde_json::to_writer(&mut self.runs, &row)?;
         writeln!(self.runs)?;
         self.runs.flush()
     }
+}
+
+fn ga_config_json(case: SweepCase, options: ga::RunOptions) -> serde_json::Value {
+    json!({
+        "solver": Solver::Ga.to_string(),
+        "size": case.size, "population": case.population, "epochs": case.epochs,
+        "mutation_rate": case.mutation_rate, "elite_ratio": case.elite_ratio,
+        "offspring_ratio": case.offspring_ratio, "min_diversity_ratio": case.min_diversity_ratio,
+        "selection_strategy": case.selection_strategy.to_string(), "tournament_size": case.tournament_size,
+        "local_search_rate": case.local_search_rate, "local_search_attempts": case.local_search_attempts,
+        "allow_unsolvable": options.allow_unsolvable,
+    })
+}
+
+fn min_conflicts_config_json(size: u16, epochs: u32, allow_unsolvable: bool) -> serde_json::Value {
+    json!({
+        "solver": Solver::MinConflicts.to_string(),
+        "size": size, "epochs": epochs, "allow_unsolvable": allow_unsolvable,
+    })
 }
 
 fn copy_rust_sources(source: &Path, dest: &Path) -> io::Result<()> {
@@ -483,17 +588,67 @@ fn main() -> Result<(), Box<dyn Error>> {
     let sweep_config = SweepConfig::parse();
 
     seed_for_offset(sweep_config.seed_start, sweep_config.seed_count - 1)?;
-    let options = ga::RunOptions {
-        allow_unsolvable: sweep_config.allow_unsolvable,
-        collect_history: false,
-        profile: sweep_config.profile,
-    };
     let mut artifacts = sweep_config
         .output_dir
         .as_ref()
         .map(|path| Artifacts::create(path, &sweep_config))
         .transpose()?;
     println!("{SUMMARY_HEADER}");
+
+    for &solver in &sweep_config.solvers {
+        match solver {
+            Solver::Ga => run_ga_sweep(&sweep_config, artifacts.as_mut())?,
+            Solver::MinConflicts => run_min_conflicts_sweep(&sweep_config, artifacts.as_mut())?,
+        }
+    }
+
+    Ok(())
+}
+
+fn write_summary_row(row: &str, artifacts: Option<&mut Artifacts>) -> io::Result<()> {
+    println!("{row}");
+    if let Some(artifacts) = artifacts {
+        writeln!(artifacts.summary, "{row}")?;
+        artifacts.summary.flush()?;
+    }
+    Ok(())
+}
+
+fn run_min_conflicts_sweep(
+    sweep_config: &SweepConfig,
+    mut artifacts: Option<&mut Artifacts>,
+) -> Result<(), Box<dyn Error>> {
+    let allow_unsolvable = sweep_config.allow_unsolvable;
+    for &size in &sweep_config.sizes {
+        for &epochs in &sweep_config.epochs {
+            let mut runs = Vec::with_capacity(sweep_config.seed_count);
+            for seed_offset in 0..sweep_config.seed_count {
+                let seed = seed_for_offset(sweep_config.seed_start, seed_offset)?;
+                let run = run_min_conflicts_seed(size, epochs, seed, allow_unsolvable)?;
+                if let Some(artifacts) = artifacts.as_deref_mut() {
+                    let config = min_conflicts_config_json(size, epochs, allow_unsolvable);
+                    artifacts.record(&config, &run)?;
+                }
+                runs.push(run);
+            }
+
+            let row = min_conflicts_summary_row(size, epochs, &runs);
+            write_summary_row(&row, artifacts.as_deref_mut())?;
+        }
+    }
+
+    Ok(())
+}
+
+fn run_ga_sweep(
+    sweep_config: &SweepConfig,
+    mut artifacts: Option<&mut Artifacts>,
+) -> Result<(), Box<dyn Error>> {
+    let options = ga::RunOptions {
+        allow_unsolvable: sweep_config.allow_unsolvable,
+        collect_history: false,
+        profile: sweep_config.profile,
+    };
 
     for &size in &sweep_config.sizes {
         for &population in &sweep_config.populations {
@@ -529,18 +684,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                                                         seed_offset,
                                                     )?;
                                                     let run = run_single_seed(case, seed, options)?;
-                                                    if let Some(artifacts) = &mut artifacts {
-                                                        artifacts.record(case, &run, options)?;
+                                                    if let Some(artifacts) =
+                                                        artifacts.as_deref_mut()
+                                                    {
+                                                        artifacts.record(
+                                                            &ga_config_json(case, options),
+                                                            &run,
+                                                        )?;
                                                     }
                                                     runs.push(run);
                                                 }
 
                                                 let row = summary_row(case, &runs);
-                                                println!("{row}");
-                                                if let Some(artifacts) = &mut artifacts {
-                                                    writeln!(artifacts.summary, "{row}")?;
-                                                    artifacts.summary.flush()?;
-                                                }
+                                                write_summary_row(&row, artifacts.as_deref_mut())?;
                                             }
                                         }
                                     }
@@ -609,14 +765,36 @@ mod tests {
             ..Default::default()
         };
         let run = run_single_seed(case, 42, options).unwrap();
-        artifacts.record(case, &run, options).unwrap();
+        artifacts
+            .record(&ga_config_json(case, options), &run)
+            .unwrap();
         writeln!(artifacts.summary, "{}", summary_row(case, &[run])).unwrap();
-        let row: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(path.join("runs.jsonl")).unwrap()).unwrap();
+        let baseline = run_min_conflicts_seed(8, 5, 42, false).unwrap();
+        artifacts
+            .record(&min_conflicts_config_json(8, 5, false), &baseline)
+            .unwrap();
+        writeln!(
+            artifacts.summary,
+            "{}",
+            min_conflicts_summary_row(8, 5, &[baseline])
+        )
+        .unwrap();
+        let runs = fs::read_to_string(path.join("runs.jsonl")).unwrap();
+        let rows: Vec<serde_json::Value> = runs
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let row = &rows[0];
         assert_eq!(row["seed"], 42);
+        assert_eq!(row["config"]["solver"], "ga");
         assert_eq!(row["config"]["size"], 3);
         assert_eq!(row["stop_reason"], "unsolvable");
         assert!(row["phase_timings"].is_object());
+        assert!(row.get("passes").is_none());
+        let row = &rows[1];
+        assert_eq!(row["config"]["solver"], "min-conflicts");
+        assert_eq!(row["stop_reason"], "solved");
+        assert!(row["passes"].is_u64() && row["swaps"].is_u64() && row["restarts"].is_u64());
         let metadata: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(path.join("metadata.json")).unwrap()).unwrap();
         assert!(metadata["rayon_threads"].as_u64().unwrap() > 0);
@@ -633,12 +811,20 @@ mod tests {
         }
         assert!(path.join("source/src/ga.rs").exists());
         assert!(path.join("source/Cargo.lock").exists());
-        assert_eq!(
-            fs::read_to_string(path.join("summary.csv"))
-                .unwrap()
+        let summary = fs::read_to_string(path.join("summary.csv")).unwrap();
+        let columns = SUMMARY_HEADER.split(',').count();
+        assert_eq!(summary.lines().count(), 3);
+        assert!(
+            summary
                 .lines()
-                .count(),
-            2
+                .all(|line| line.split(',').count() == columns)
+        );
+        assert!(
+            summary
+                .lines()
+                .nth(2)
+                .unwrap()
+                .starts_with("min-conflicts,8,,5,")
         );
         assert!(Artifacts::create(&path, &config).is_err());
         drop(artifacts);

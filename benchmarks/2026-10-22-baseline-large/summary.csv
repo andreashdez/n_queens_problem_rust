@@ -1,0 +1,4 @@
+solver,size,population,epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,local_search_rate,local_search_attempts,seeds,solved,solve_rate,median_solved_epoch,median_elapsed_ms,total_elapsed_ms,best_conflicts_median,best_conflicts_min
+min-conflicts,1000,,5000,,,,,,,,,20,20,1.000,13.0,0.0,0,0.0,0
+min-conflicts,10000,,5000,,,,,,,,,20,20,1.000,35.5,2.0,52,0.0,0
+min-conflicts,65535,,5000,,,,,,,,,20,20,1.000,39.0,13.0,336,0.0,0
