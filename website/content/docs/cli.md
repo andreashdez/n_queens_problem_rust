@@ -20,11 +20,13 @@ Use `cargo run --release --locked -- --help` to see the CLI's current options. A
 
 | Option | Alias | Default | Purpose |
 | --- | --- | --- | --- |
+| `--solver` | — | `ga` | `ga` or `min-conflicts`. See [the min-conflicts baseline](#run-the-min-conflicts-baseline). |
 | `--size` | `-n` | `18` | Board dimension, from 1 to 65535. |
 | `--population` | `-p` | `500` | Positive initial and target population size. |
-| `--epochs` | `-e` | `5000` | Positive maximum number of evolution epochs. |
+| `--epochs` | `-e` | `5000` | Positive maximum number of evolution epochs, or repair passes for min-conflicts. |
 | `--seed` | `-s` | Generated | Unsigned 64-bit seed for reproducible runs. |
 | `--allow-unsolvable` | — | Off | Evolve sizes 2 and 3 for experiments instead of stopping at epoch zero. |
+| `--fail-unsolved` | — | Off | Exit with status 1 when the run ends without a solution. |
 
 ### Evolution and local search
 
@@ -67,11 +69,11 @@ cargo run --release --locked -- \
   --metrics-csv run-42.csv --json
 ```
 
-The CSV includes configuration, outcomes, elapsed time, best/average conflicts, diversity, adaptive rates, offspring, local-search improvements, and stagnation. Epoch zero is included. CLI CSV export **replaces an existing file** at the chosen path. The [GUI export](../gui/#export-a-run) keeps bounded samples and refuses to overwrite files.
+The CSV includes configuration, outcomes, elapsed time, best/average conflicts, diversity, adaptive rates, offspring, local-search improvements, and stagnation. Epoch zero is included. CLI CSV export **replaces an existing file** at the chosen path. The [GUI export](../gui/#export-a-run) keeps bounded samples and asks before replacing a file.
 
 ## Read an unsolved outcome
 
-A successful process exit does not necessarily mean a solution was found. For example, this deliberately impossible board stops without evolving:
+By default, a successful process exit does not necessarily mean a solution was found. For example, this deliberately impossible board stops without evolving:
 
 <!-- docs-check: unsolvable -->
 ```bash
@@ -90,8 +92,37 @@ Selected fields from the JSON result:
 }
 ```
 
+## Run the min-conflicts baseline
+
+`--solver min-conflicts` replaces the genetic algorithm with a single-board local search, giving GA results a reference point. [How it works →](../algorithm/#a-min-conflicts-baseline)
+
+<!-- docs-check: min-conflicts -->
+```bash
+cargo run --release --locked -- \
+  --solver min-conflicts --size 1000 --seed 42 --json
+```
+
+Selected fields from the JSON result:
+
+<!-- docs-result: min-conflicts -->
+```json
+{
+  "board_size": 1000,
+  "solver": "min-conflicts",
+  "stop_reason": "solved"
+}
+```
+
+`--epochs` caps the total repair passes across restarts. Flags that only configure the genetic algorithm (`--population`, the rate and selection options, local search, `--metrics-csv`, and `--profile`) are rejected rather than ignored. In place of the GA's population and diversity fields, JSON reports `passes`, `swaps`, and `restarts`; `solved_epoch` is the pass that found the solution, or 0 when the greedy start board was already solved. Both solvers include a `solver` field.
+
 ## Outcomes and exit status
 
-`metrics.stop_reason()` reports `StopReason::Solved`, `EpochLimit`, `Cancelled`, or `Unsolvable`. CLI JSON exposes these as `solved`, `epoch_limit`, `cancelled`, and `unsolvable`; CSV adds `stop_reason` and `allow_unsolvable` columns. Unsolved outcomes are valid run results and retain a successful CLI exit status. Invalid input and I/O failures still return an error status.
+`metrics.stop_reason()` reports `StopReason::Solved`, `EpochLimit`, `Cancelled`, or `Unsolvable`. CLI JSON exposes these as `solved`, `epoch_limit`, `cancelled`, and `unsolvable`; CSV adds `stop_reason` and `allow_unsolvable` columns. Unsolved outcomes are valid run results and keep a successful CLI exit status by default. For scripts and CI, `--fail-unsolved` makes the CLI exit with status 1 whenever the stop reason is not `solved`; the summary, board, JSON, and CSV are still written first.
+
+| Exit status | Meaning |
+| --- | --- |
+| `0` | The run finished. Without `--fail-unsolved`, this includes unsolved outcomes. |
+| `1` | `--fail-unsolved` was set and the run ended without a solution. |
+| `2` | Invalid arguments or configuration, or a JSON or CSV write failure. |
 
 [Start your first run →](../getting-started/) · [Compare configurations →](../tuning/)

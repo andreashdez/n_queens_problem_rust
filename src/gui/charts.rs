@@ -8,7 +8,14 @@ use egui_plot::{
     PlotMemory, VLine,
 };
 
-use super::{Color32, MetricHistory, RichText, egui};
+use eframe::egui::{self, Color32, RichText};
+
+use super::{
+    Step,
+    palette::Palette,
+    worker::{MetricHistory, Progress},
+};
+use crate::{Solver, ga::EpochMetrics, min_conflicts::PassMetrics};
 
 pub(super) struct ChartMarker {
     pub epoch: u32,
@@ -27,12 +34,15 @@ const GRID_SPACING: egui::Rangef = egui::Rangef {
     min: 8.0,
     max: 40.0,
 };
-/// Keep ticks far enough apart for egui_plot to label every one of them.
+/// Keep ticks far enough apart for `egui_plot` to label every one of them.
 const X_TICK_POINTS: f64 = 80.0;
 const Y_TICK_POINTS: f64 = 32.0;
 /// Wide enough for "100%" so linked charts line up.
 const Y_AXIS_WIDTH: f32 = 44.0;
 /// A restart counts as hovered within this many points of the pointer.
+const MIN_PLOT_HEIGHT: f32 = 100.0;
+/// The `add_space` and strong title label drawn above each plot.
+const CHART_TITLE_HEIGHT: f32 = 4.0 + 18.0;
 const MARKER_HOVER_POINTS: f64 = 8.0;
 
 #[allow(
@@ -93,7 +103,7 @@ impl ChartScale {
         }
     }
 
-    fn grid_marks(self, input: GridInput) -> Vec<GridMark> {
+    fn grid_marks(self, input: &GridInput) -> Vec<GridMark> {
         match self {
             Self::Conflicts | Self::Percent => linear_marks(input, Y_TICK_POINTS),
             Self::LogConflicts => log_marks(input.bounds),
@@ -120,7 +130,7 @@ fn nice_step(value_per_point: f64, min_points: f64) -> f64 {
 }
 
 /// Evenly spaced round ticks covering the visible range.
-fn linear_marks(input: GridInput, min_points: f64) -> Vec<GridMark> {
+fn linear_marks(input: &GridInput, min_points: f64) -> Vec<GridMark> {
     let (min, max) = input.bounds;
     let step = nice_step(
         input.base_step_size / f64::from(GRID_SPACING.min),
@@ -129,21 +139,22 @@ fn linear_marks(input: GridInput, min_points: f64) -> Vec<GridMark> {
     if !min.is_finite() || !max.is_finite() || (max - min) / step > 10_000.0 {
         return Vec::new();
     }
-    let mut marks = Vec::new();
-    let mut index = (min / step).ceil();
-    while index * step <= max {
-        marks.push(GridMark {
-            value: index * step + 0.0,
+    let first = (min / step).ceil();
+    // The range check above caps the span at 10,000 steps.
+    (0..=10_000_u32)
+        .map(|offset| first + f64::from(offset))
+        .take_while(|index| index * step <= max)
+        .map(|index| GridMark {
+            // Adding 0.0 turns -0.0 into 0.0.
+            value: index.mul_add(step, 0.0),
             step_size: step,
-        });
-        index += 1.0;
-    }
-    marks
+        })
+        .collect()
 }
 
 /// Ticks at 0 and 1-2-5 × 10ⁿ on a [`log_axis`]. Zero and powers of ten from 10
 /// get a full decade step; the rest use their gap to the previous tick, so
-/// egui_plot drops crowded intermediate labels first.
+/// `egui_plot` drops crowded intermediate labels first.
 fn log_marks((min, max): (f64, f64)) -> Vec<GridMark> {
     if !min.is_finite() || !max.is_finite() {
         return Vec::new();
@@ -196,6 +207,8 @@ pub(super) fn nearest_chart_sample(values: &[(u32, f32)], epoch: f64) -> Option<
 
 pub(super) struct Chart<'a> {
     pub title: &'a str,
+    /// What one x-axis unit is: "Epoch", "Pass", or both for a mixed comparison.
+    pub x_label: &'a str,
     pub height: f32,
     pub scale: ChartScale,
     /// Charts in the same group share their epoch range and hover cursor.
@@ -213,10 +226,12 @@ impl Chart<'_> {
     ) {
         let Self {
             title,
+            x_label,
             height,
             scale,
             link,
         } = self;
+        let step = x_label.to_lowercase();
         ui.add_space(4.0);
         ui.label(RichText::new(title).strong());
 
@@ -237,11 +252,11 @@ impl Chart<'_> {
             .allow_zoom([true, false])
             .allow_drag([true, false])
             .grid_spacing(GRID_SPACING)
-            .x_grid_spacer(|input| linear_marks(input, X_TICK_POINTS))
-            .y_grid_spacer(move |input| scale.grid_marks(input))
+            .x_grid_spacer(|input| linear_marks(&input, X_TICK_POINTS))
+            .y_grid_spacer(move |input| scale.grid_marks(&input))
             .x_axis_formatter(|mark, _| format!("{:.0}", mark.value + 0.0))
             .y_axis_formatter(move |mark, _| scale.format_tick(mark))
-            .x_axis_label("Epoch")
+            .x_axis_label(x_label)
             // Equal axis widths keep the plot areas of linked charts aligned.
             .y_axis_min_width(Y_AXIS_WIDTH)
             .include_x(0.0)
@@ -249,7 +264,9 @@ impl Chart<'_> {
             .label_formatter(move |hover| {
                 let (HoverPosition::NearDataPoint { position, .. }
                 | HoverPosition::Elsewhere { position }) = hover;
-                hover_text(series, markers, &hidden, scale, position.x, tolerance)
+                hover_text(
+                    series, markers, &hidden, scale, &step, position.x, tolerance,
+                )
             });
         if scale == ChartScale::Percent {
             plot = plot.include_y(100.0);
@@ -286,11 +303,13 @@ impl Chart<'_> {
 }
 
 /// Every visible series at its retained sample nearest the pointer, plus nearby restarts.
+/// `step` names the x-axis unit in lower case.
 fn hover_text(
     series: &[ChartSeries],
     markers: &[ChartMarker],
     hidden: &ItemIdSet,
     scale: ChartScale,
+    step: &str,
     epoch: f64,
     tolerance: f64,
 ) -> Option<String> {
@@ -300,7 +319,7 @@ fn hover_text(
         if let Some((sample_epoch, value)) = nearest_chart_sample(&line.values, epoch) {
             writeln!(
                 text,
-                "{} · epoch {sample_epoch}: {}",
+                "{} · {step} {sample_epoch}: {}",
                 line.label,
                 scale.format_value(value)
             )
@@ -314,40 +333,52 @@ fn hover_text(
         })
         .take(6)
     {
-        writeln!(text, "{} at epoch {}", marker.label, marker.epoch)
+        writeln!(text, "{} at {step} {}", marker.label, marker.epoch)
             .expect("writing to a String cannot fail");
     }
     let text = text.trim_end();
     (!text.is_empty()).then(|| text.to_owned())
 }
 
-/// Conflict and population-ratio charts for one run, sharing an epoch axis.
+/// Plot height that lets `charts` stacked charts fill the rest of `ui`.
+pub(super) fn plot_height(ui: &egui::Ui, charts: u8) -> f32 {
+    let charts = f32::from(charts);
+    // Each chart adds a title row and spacing above its plot.
+    let chrome = 2.0f32.mul_add(ui.spacing().item_spacing.y, CHART_TITLE_HEIGHT);
+    (charts.mul_add(-chrome, ui.available_height()) / charts).max(MIN_PLOT_HEIGHT)
+}
+
+/// The charts for one run: attacking pairs and population ratios sharing an
+/// epoch axis for the GA, or attacking pairs by pass for min-conflicts.
 pub(super) fn draw_metric_charts(
     ui: &mut egui::Ui,
     history: &MetricHistory,
     key: impl Hash + Debug + Copy,
-    log_conflicts: &mut bool,
+    log_conflicts: bool,
 ) {
-    let snapshots = &history.points;
+    let palette = Palette::of(ui.ctx());
+    let Some(first) = history.points.first() else {
+        ui.label("Charts appear after the first progress report.");
+        return;
+    };
+    let solver = match first {
+        Progress::Ga(_) => Solver::Ga,
+        Progress::MinConflicts(_) => Solver::MinConflicts,
+    };
     let markers: Vec<_> = history
         .restart_epochs
         .iter()
         .map(|&epoch| ChartMarker {
             epoch,
-            label: "Soft restart".into(),
-            color: Color32::from_rgb(245, 190, 85),
+            label: match solver {
+                Solver::Ga => "Soft restart",
+                Solver::MinConflicts => "Restart",
+            }
+            .into(),
+            color: palette.restart(),
         })
         .collect();
-    if snapshots.is_empty() {
-        ui.label("Charts appear after the first epoch snapshot.");
-        return;
-    }
-    ui.horizontal_wrapped(|ui| {
-        ui.weak("Drag to pan · Ctrl/Cmd + scroll to zoom · double-click to reset · click legend entries to hide them");
-        ui.checkbox(log_conflicts, "Log conflict scale")
-            .on_hover_text("Spread out small conflict counts so the best score stays visible next to the population average.");
-    });
-    if let Some(latest) = snapshots.last()
+    if let Some(latest) = history.points.last()
         && latest.restart_count() as usize > markers.len()
     {
         ui.weak(format!(
@@ -357,66 +388,113 @@ pub(super) fn draw_metric_charts(
         ));
     }
 
+    let best_board = ChartSeries {
+        label: "Best board".into(),
+        color: palette.best_conflicts(),
+        values: history
+            .points
+            .iter()
+            .map(|point| (point.step(), plot_value(point.best_conflicts_sum())))
+            .collect(),
+    };
+    let x_label = Step::of(solver).title;
+    match solver {
+        Solver::Ga => draw_ga_charts(ui, history, best_board, &markers, key, log_conflicts),
+        Solver::MinConflicts => {
+            let current_board = ChartSeries {
+                label: "Current board".into(),
+                color: palette.average_conflicts,
+                values: pass_metrics(history)
+                    .map(|metrics| (metrics.pass(), plot_value(metrics.current_conflicts_sum())))
+                    .collect(),
+            };
+            Chart {
+                title: "Attacking pairs",
+                x_label,
+                height: plot_height(ui, 1),
+                scale: ChartScale::conflicts(log_conflicts),
+                link: None,
+            }
+            .show(ui, key, &[best_board, current_board], &markers);
+        }
+    }
+}
+
+fn epoch_metrics(history: &MetricHistory) -> impl Iterator<Item = &EpochMetrics> {
+    history.points.iter().filter_map(|point| match point {
+        Progress::Ga(metrics) => Some(metrics),
+        Progress::MinConflicts(_) => None,
+    })
+}
+
+fn pass_metrics(history: &MetricHistory) -> impl Iterator<Item = &PassMetrics> {
+    history.points.iter().filter_map(|point| match point {
+        Progress::MinConflicts(metrics) => Some(metrics),
+        Progress::Ga(_) => None,
+    })
+}
+
+fn draw_ga_charts(
+    ui: &mut egui::Ui,
+    history: &MetricHistory,
+    best_board: ChartSeries,
+    markers: &[ChartMarker],
+    key: impl Hash + Debug + Copy,
+    log_conflicts: bool,
+) {
+    let palette = Palette::of(ui.ctx());
+    let height = plot_height(ui, 2);
     let link = Some(ui.make_persistent_id(("metric_charts", key)));
+    let x_label = Step::of(Solver::Ga).title;
+    let series = |label: &str, color, value: fn(&EpochMetrics) -> f32| ChartSeries {
+        label: label.into(),
+        color,
+        values: epoch_metrics(history)
+            .map(|metrics| (metrics.epoch(), value(metrics)))
+            .collect(),
+    };
     let conflicts = [
-        ChartSeries {
-            label: "Best conflicts".into(),
-            color: Color32::from_rgb(95, 220, 140),
-            values: snapshots
-                .iter()
-                .map(|snapshot| (snapshot.epoch(), plot_value(snapshot.best_conflicts_sum())))
-                .collect(),
-        },
-        ChartSeries {
-            label: "Average conflicts".into(),
-            color: Color32::from_rgb(110, 190, 255),
-            values: snapshots
-                .iter()
-                .map(|snapshot| (snapshot.epoch(), snapshot.average_conflicts_sum()))
-                .collect(),
-        },
+        best_board,
+        series(
+            "Population average",
+            palette.average_conflicts,
+            EpochMetrics::average_conflicts_sum,
+        ),
     ];
     Chart {
-        title: "Conflict history",
-        height: 190.0,
-        scale: ChartScale::conflicts(*log_conflicts),
+        title: "Attacking pairs",
+        x_label,
+        height,
+        scale: ChartScale::conflicts(log_conflicts),
         link,
     }
-    .show(ui, key, &conflicts, &markers);
+    .show(ui, key, &conflicts, markers);
 
     let rates = [
-        ChartSeries {
-            label: "Diversity".into(),
-            color: Color32::from_rgb(245, 210, 95),
-            values: snapshots
-                .iter()
-                .map(|snapshot| (snapshot.epoch(), snapshot.diversity_ratio()))
-                .collect(),
-        },
-        ChartSeries {
-            label: "Mutation rate".into(),
-            color: Color32::from_rgb(245, 120, 170),
-            values: snapshots
-                .iter()
-                .map(|snapshot| (snapshot.epoch(), snapshot.mutation_rate()))
-                .collect(),
-        },
-        ChartSeries {
-            label: "Elite fraction".into(),
-            color: Color32::from_rgb(160, 135, 255),
-            values: snapshots
-                .iter()
-                .map(|snapshot| (snapshot.epoch(), snapshot.elite_ratio()))
-                .collect(),
-        },
+        series(
+            "Diversity",
+            palette.diversity,
+            EpochMetrics::diversity_ratio,
+        ),
+        series(
+            "Mutation rate",
+            palette.mutation_rate,
+            EpochMetrics::mutation_rate,
+        ),
+        series(
+            "Elite fraction",
+            palette.elite_fraction,
+            EpochMetrics::elite_ratio,
+        ),
     ];
     Chart {
         title: "Population ratios",
-        height: 170.0,
+        x_label,
+        height,
         scale: ChartScale::Percent,
         link,
     }
-    .show(ui, key, &rates, &markers);
+    .show(ui, key, &rates, markers);
 }
 
 #[cfg(test)]
@@ -455,23 +533,26 @@ mod tests {
     fn linear_ticks_are_round_whole_numbers() {
         // The old chart split 0..=11.7 into quarters: 2.9, 5.8, 8.8.
         assert_eq!(
-            values(&linear_marks(input((-0.6, 12.3), 0.1), 32.0)),
+            values(&linear_marks(&input((-0.6, 12.3), 0.1), 32.0)),
             [0.0, 5.0, 10.0]
         );
         assert_eq!(
-            values(&linear_marks(input((0.0, 39.0), 0.05), 80.0)),
+            values(&linear_marks(&input((0.0, 39.0), 0.05), 80.0)),
             [0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0]
         );
         // Fine zoom never produces fractional conflicts or epochs.
         assert_eq!(
-            values(&linear_marks(input((0.0, 3.0), 0.001), 32.0)),
+            values(&linear_marks(&input((0.0, 3.0), 0.001), 32.0)),
             [0.0, 1.0, 2.0, 3.0]
         );
         assert_eq!(nice_step(3.0, 32.0), 100.0);
         assert_eq!(nice_step(f64::NAN, 32.0), 1.0);
-        assert!(linear_marks(input((f64::NEG_INFINITY, 1.0), 0.1), 32.0).is_empty());
+        assert_eq!(
+            values(&linear_marks(&input((f64::NEG_INFINITY, 1.0), 0.1), 32.0)),
+            Vec::<f64>::new()
+        );
         assert!(
-            linear_marks(input((-0.5, 0.0), 0.1), 32.0)
+            linear_marks(&input((-0.5, 0.0), 0.1), 32.0)
                 .iter()
                 .all(|mark| mark.value.is_sign_positive())
         );
@@ -495,7 +576,7 @@ mod tests {
             .collect();
         assert_eq!(majors, ["0", "10", "100"]);
         assert!(marks.iter().all(|mark| mark.step_size > 0.0));
-        assert!(log_marks((f64::NAN, 1.0)).is_empty());
+        assert_eq!(values(&log_marks((f64::NAN, 1.0))), Vec::<f64>::new());
     }
 
     #[test]
@@ -539,6 +620,7 @@ mod tests {
             &markers,
             &ItemIdSet::default(),
             ChartScale::Conflicts,
+            "epoch",
             8.0,
             2.0,
         )
@@ -547,15 +629,24 @@ mod tests {
             text,
             "Best · epoch 10: 1\nRatio · epoch 10: 0.25\nSoft restart at epoch 9"
         );
-        let hidden: ItemIdSet = [ItemId::new(&series[0].label)].into_iter().collect();
-        let text = hover_text(&series, &markers, &hidden, ChartScale::Percent, 8.0, 0.5);
-        assert_eq!(text.as_deref(), Some("Ratio · epoch 10: 25.0%"));
+        let hidden: ItemIdSet = std::iter::once(ItemId::new(&series[0].label)).collect();
+        let text = hover_text(
+            &series,
+            &markers,
+            &hidden,
+            ChartScale::Percent,
+            "pass",
+            8.0,
+            0.5,
+        );
+        assert_eq!(text.as_deref(), Some("Ratio · pass 10: 25.0%"));
         assert_eq!(
             hover_text(
                 &series,
                 &[],
                 &ItemIdSet::default(),
                 ChartScale::Conflicts,
+                "epoch",
                 50.0,
                 1.0
             ),

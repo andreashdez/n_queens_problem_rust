@@ -3,7 +3,7 @@ title: "How the algorithm works"
 description: "Understand board representation, genetic operators, and the metrics used to follow a run."
 ---
 
-The solver searches a population of possible boards for one with no attacking queens. It uses a genetic algorithm, with optional local search to improve promising candidates.
+The solver searches a population of possible boards for one with no attacking queens. It uses a genetic algorithm, with optional local search to improve promising candidates. A [min-conflicts baseline](#a-min-conflicts-baseline) is also available for comparison.
 
 ## A board is a permutation
 
@@ -43,8 +43,8 @@ A diversity refresh and a soft restart are different events. Dashed **Soft resta
 
 | Metric | Meaning |
 | --- | --- |
-| Best conflicts | Best conflict sum found so far. Zero means solved. Each attacking pair contributes to both queens' counts. |
-| Average conflicts | Mean conflict sum of the current population. |
+| Best conflicts | Fewest attacking pairs on any board found so far. Zero means solved. |
+| Average conflicts | Mean attacking pairs per board in the current population. |
 | Diversity ratio | Unique board permutations divided by population size. |
 | Mutation / elite ratio | The rates applied for that epoch, including adaptive changes. |
 | Stagnation epochs | Epochs since the latest improvement or stagnation reset. |
@@ -71,7 +71,17 @@ A lower diversity ratio alone does not prove that a restart happened. Use the ex
 
 ## A concrete conflict count
 
-On a 4×4 board, permutation `[0, 2, 1, 3]` has two attacking pairs: columns 1 and 4 share a diagonal, as do columns 2 and 3 (using GUI's one-based labels). Every queen has one conflict, so the total conflict sum is **4**, not 2. A solved permutation such as `[1, 3, 0, 2]` has sum **0**.
+On a 4×4 board, permutation `[0, 2, 1, 3]` has two attacking pairs: columns 1 and 4 share a diagonal, as do columns 2 and 3 (using GUI's one-based labels). Its conflict sum, the score the solver minimizes, is therefore **2**. Every queen is attacked by one other queen, so the per-queen counts on the board and in JSON `conflicts` are `[1, 1, 1, 1]`; they add up to twice the conflict sum because each pair involves two queens. A solved permutation such as `[1, 3, 0, 2]` has sum **0**.
+
+## A min-conflicts baseline
+
+`--solver min-conflicts` replaces the genetic algorithm with a standard single-board local search, so you can compare the GA against a non-evolutionary method. It uses the same permutation encoding and reports the same stop reasons.
+
+1. **Start greedily.** Place queens column by column, preferring a random unused row whose diagonals are still empty.
+2. **Repair in passes.** Each pass visits every column. An attacked queen swaps rows with the first of up to 32 random partners that lowers the number of attacking pairs.
+3. **Restart when stuck.** A pass without an improving swap starts again from a new greedy board. The best board seen is kept.
+
+Diagonal occupancy counts make each candidate swap constant-time, so a solve takes roughly linear time in the board size. `--epochs` caps the total passes across restarts. In the GUI, choose **Min-conflicts** as the solver or start from the **Min-conflicts baseline · 1000×1000** preset. [See the measured comparison →](../benchmarks/#min-conflicts-baseline)
 
 ## Why use multiple seeds?
 

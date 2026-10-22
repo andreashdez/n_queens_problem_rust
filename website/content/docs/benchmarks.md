@@ -57,6 +57,30 @@ The table shows four selected presets. The complete validation includes all eigh
 | [Exploration results](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-09-14-n18/summary.csv) | Earlier experiments using seeds 1–10. |
 | [Criterion output](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-09-14-criterion.txt) | Phase estimates and reported outliers. |
 
+## Min-conflicts baseline
+
+These measurements were recorded on **2026-10-22**, on macOS/aarch64 (Apple M2) with eight Rayon threads and Rust 1.99.1, using the `parameter_sweep` example from the change that added `--solver min-conflicts`. Each cell covers seeds 101–120 with a 5,000-epoch (or pass) budget, and the GA used its shipped defaults, passed explicitly. Runtime is measured in-process and includes building the GA population or the greedy start board.
+
+| Board size | GA solved | GA median runtime | Min-conflicts solved | Min-conflicts median runtime |
+| ---: | ---: | ---: | ---: | ---: |
+| 8 | 20/20 | 0.14 ms | 20/20 | 0.003 ms |
+| 18 | 20/20 | 5.4 ms | 20/20 | 0.007 ms |
+| 32 | 20/20 | 10.9 ms | 20/20 | 0.010 ms |
+| 64 | 20/20 | 32.2 ms | 20/20 | 0.011 ms |
+| 100 | 20/20 | 49.9 ms | 20/20 | 0.021 ms |
+| 1,000 | Not measured | — | 20/20 | 0.16 ms |
+| 10,000 | Not measured | — | 20/20 | 2.5 ms |
+| 65,535 | Not measured | — | 20/20 | 13.9 ms |
+
+Min-conflicts needed a median of 2 to 39 passes and at most 15 restarts per run; its slowest run at 65,535 took 50.3 ms. That size is the largest the `u16` row encoding allows. The gap reflects the method, not tuning: min-conflicts repairs one board with constant-time swap checks, while the GA evaluates and recombines a population every epoch. Use the baseline to judge how much of a run's cost comes from the evolutionary search itself.
+
+| Evidence | What it contains |
+| --- | --- |
+| [Both solvers, sizes 8–100](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-10-22-baseline/summary.csv) | GA and min-conflicts aggregates; [per-seed records](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-10-22-baseline/runs.jsonl) include nanosecond runtimes, passes, swaps, and restarts. |
+| [Min-conflicts, sizes 1,000–65,535](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-10-22-baseline-large/summary.csv) | Large-board aggregates and [per-seed records](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/2026-10-22-baseline-large/runs.jsonl). |
+
+Each directory also holds `metadata.json` and the archived `source.tar.gz`; the [benchmark report](https://github.com/andreashdez/n_queens_problem_rust/blob/main/benchmarks/README.md#min-conflicts-baseline-2026-10-22) has the commands.
+
 ## Profiling
 
 ```bash
