@@ -25,6 +25,7 @@ Use `cargo run --release --locked -- --help` to see the CLI's current options. A
 | `--epochs` | `-e` | `5000` | Positive maximum number of evolution epochs. |
 | `--seed` | `-s` | Generated | Unsigned 64-bit seed for reproducible runs. |
 | `--allow-unsolvable` | — | Off | Evolve sizes 2 and 3 for experiments instead of stopping at epoch zero. |
+| `--fail-unsolved` | — | Off | Exit with status 1 when the run ends without a solution. |
 
 ### Evolution and local search
 
@@ -71,7 +72,7 @@ The CSV includes configuration, outcomes, elapsed time, best/average conflicts, 
 
 ## Read an unsolved outcome
 
-A successful process exit does not necessarily mean a solution was found. For example, this deliberately impossible board stops without evolving:
+By default, a successful process exit does not necessarily mean a solution was found. For example, this deliberately impossible board stops without evolving:
 
 <!-- docs-check: unsolvable -->
 ```bash
@@ -92,6 +93,12 @@ Selected fields from the JSON result:
 
 ## Outcomes and exit status
 
-`metrics.stop_reason()` reports `StopReason::Solved`, `EpochLimit`, `Cancelled`, or `Unsolvable`. CLI JSON exposes these as `solved`, `epoch_limit`, `cancelled`, and `unsolvable`; CSV adds `stop_reason` and `allow_unsolvable` columns. Unsolved outcomes are valid run results and retain a successful CLI exit status. Invalid input and I/O failures still return an error status.
+`metrics.stop_reason()` reports `StopReason::Solved`, `EpochLimit`, `Cancelled`, or `Unsolvable`. CLI JSON exposes these as `solved`, `epoch_limit`, `cancelled`, and `unsolvable`; CSV adds `stop_reason` and `allow_unsolvable` columns. Unsolved outcomes are valid run results and keep a successful CLI exit status by default. For scripts and CI, `--fail-unsolved` makes the CLI exit with status 1 whenever the stop reason is not `solved`; the summary, board, JSON, and CSV are still written first.
+
+| Exit status | Meaning |
+| --- | --- |
+| `0` | The run finished. Without `--fail-unsolved`, this includes unsolved outcomes. |
+| `1` | `--fail-unsolved` was set and the run ended without a solution. |
+| `2` | Invalid arguments or configuration, or a JSON or CSV write failure. |
 
 [Start your first run →](../getting-started/) · [Compare configurations →](../tuning/)

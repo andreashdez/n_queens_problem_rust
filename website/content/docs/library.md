@@ -3,7 +3,7 @@ title: "Library usage"
 description: "Configure the Rust solver, collect progress, request cancellation, and inspect results."
 ---
 
-`metrics.stop_reason()` reports `StopReason::Solved`, `EpochLimit`, `Cancelled`, or `Unsolvable`. CLI JSON exposes these as `solved`, `epoch_limit`, `cancelled`, and `unsolvable`; CSV adds `stop_reason` and `allow_unsolvable` columns. Unsolved outcomes are valid run results and retain a successful CLI exit status. Invalid input and I/O failures still return an error status.
+`metrics.stop_reason()` reports `StopReason::Solved`, `EpochLimit`, `Cancelled`, or `Unsolvable`. CLI JSON exposes these as `solved`, `epoch_limit`, `cancelled`, and `unsolvable`; CSV adds `stop_reason` and `allow_unsolvable` columns. Unsolved outcomes are valid run results and keep a successful CLI exit status unless you pass `--fail-unsolved`. Invalid input and I/O failures still return an error status.
 
 For progress, cancellation, bounded metric retention, or profiling:
 

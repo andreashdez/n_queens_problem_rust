@@ -2,7 +2,7 @@ use std::{
     fs::{self, File},
     io::Write,
     path::{Path, PathBuf},
-    process,
+    process::{self, ExitCode},
 };
 
 use clap::{ArgAction, Parser};
@@ -171,8 +171,19 @@ struct RunConfig {
     json_output: bool,
     #[arg(long, help = "Evolve unsolvable sizes 2 and 3 for experiments")]
     allow_unsolvable: bool,
+    #[arg(long, help = "Exit with status 1 when the run ends without a solution")]
+    fail_unsolved: bool,
     #[arg(long, help = "Include cumulative solver phase timings in the summary")]
     profile: bool,
+}
+
+/// Exit status for a finished run: failure only for an unsolved run under `--fail-unsolved`.
+fn run_exit_code(run_config: &RunConfig, run_metrics: &ga::RunMetrics) -> ExitCode {
+    if run_config.fail_unsolved && run_metrics.stop_reason() != ga::StopReason::Solved {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 fn chromosome_json(chromosome: &ga::chromosome::Chromosome) -> serde_json::Value {
@@ -408,7 +419,7 @@ fn validated_ga_config(
     .validated()
 }
 
-fn main() {
+fn main() -> ExitCode {
     let run_config = RunConfig::parse();
     let log_level = if run_config.quiet || run_config.json_output {
         log::LevelFilter::Off
@@ -487,7 +498,7 @@ fn main() {
             eprintln!("{error}");
             process::exit(2);
         });
-        return;
+        return run_exit_code(&run_config, &run_metrics);
     }
 
     log::info!("done running epoch");
@@ -513,4 +524,5 @@ fn main() {
     }
 
     log::info!("done n_queens_problem");
+    run_exit_code(&run_config, &run_metrics)
 }

@@ -33,7 +33,7 @@ The GUI is a native application; the documentation website does not run the solv
 cargo run --release --locked -- --size 18 --seed 42
 ```
 
-This prints progress, a result summary, and the best board. **Zero conflicts means solved.** `epoch_limit` means the search used its budget without finding a solution; sizes 2 and 3 normally stop immediately as `unsolvable`. Check the stop reason, since unsolved runs still return a successful process exit status.
+This prints progress, a result summary, and the best board. **Zero conflicts means solved.** `epoch_limit` means the search used its budget without finding a solution; sizes 2 and 3 normally stop immediately as `unsolvable`. Check the stop reason, since unsolved runs still return a successful process exit status; add `--fail-unsolved` to exit with status 1 instead.
 
 Add `--json` for machine-readable output, `--metrics-csv run.csv` to record every epoch, or `--help` for all options. CLI CSV export replaces an existing file at the selected path.
 

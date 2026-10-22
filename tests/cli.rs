@@ -393,3 +393,27 @@ fn json_reports_stop_reason_and_opt_in_profiling() {
         );
     }
 }
+
+#[test]
+fn fail_unsolved_sets_exit_status_only_for_unsolved_runs() {
+    let unsolved_args = ["--size", "3", "--population", "4", "--epochs", "2"];
+    let output = run_command(&[&unsolved_args[..], &["--fail-unsolved", "--json"]].concat());
+    assert_eq!(output.status.code(), Some(1), "{}", output_text(&output));
+    let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(summary["stop_reason"], "unsolvable");
+
+    let output = run_command(
+        &[
+            &unsolved_args[..],
+            &["--allow-unsolvable", "--fail-unsolved", "--no-board"],
+        ]
+        .concat(),
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", output_text(&output));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Stop reason: epoch_limit"));
+
+    run_success(&[&unsolved_args[..], &["--json"]].concat());
+    let output = run_success(&["--size", "8", "--seed", "42", "--fail-unsolved", "--json"]);
+    let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(summary["stop_reason"], "solved");
+}
