@@ -306,7 +306,7 @@ impl NQueensApp {
         }
     }
 
-    pub(super) fn draw_comparison(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn draw_comparison(&self, ui: &mut egui::Ui) {
         let pair = self
             .archive
             .compare
@@ -508,7 +508,7 @@ mod tests {
             app.draw_run_history(ui, &ctx);
             app.draw_comparison(ui);
         });
-        assert!(!output.shapes.is_empty());
+        assert_ne!(output.shapes.len(), 0);
         output.drop_without_applying_deltas();
     }
 }

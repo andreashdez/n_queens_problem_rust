@@ -29,7 +29,7 @@ const GRID_SPACING: egui::Rangef = egui::Rangef {
     min: 8.0,
     max: 40.0,
 };
-/// Keep ticks far enough apart for egui_plot to label every one of them.
+/// Keep ticks far enough apart for `egui_plot` to label every one of them.
 const X_TICK_POINTS: f64 = 80.0;
 const Y_TICK_POINTS: f64 = 32.0;
 /// Wide enough for "100%" so linked charts line up.
@@ -98,7 +98,7 @@ impl ChartScale {
         }
     }
 
-    fn grid_marks(self, input: GridInput) -> Vec<GridMark> {
+    fn grid_marks(self, input: &GridInput) -> Vec<GridMark> {
         match self {
             Self::Conflicts | Self::Percent => linear_marks(input, Y_TICK_POINTS),
             Self::LogConflicts => log_marks(input.bounds),
@@ -125,7 +125,7 @@ fn nice_step(value_per_point: f64, min_points: f64) -> f64 {
 }
 
 /// Evenly spaced round ticks covering the visible range.
-fn linear_marks(input: GridInput, min_points: f64) -> Vec<GridMark> {
+fn linear_marks(input: &GridInput, min_points: f64) -> Vec<GridMark> {
     let (min, max) = input.bounds;
     let step = nice_step(
         input.base_step_size / f64::from(GRID_SPACING.min),
@@ -134,21 +134,22 @@ fn linear_marks(input: GridInput, min_points: f64) -> Vec<GridMark> {
     if !min.is_finite() || !max.is_finite() || (max - min) / step > 10_000.0 {
         return Vec::new();
     }
-    let mut marks = Vec::new();
-    let mut index = (min / step).ceil();
-    while index * step <= max {
-        marks.push(GridMark {
-            value: index * step + 0.0,
+    let first = (min / step).ceil();
+    // The range check above caps the span at 10,000 steps.
+    (0..=10_000_u32)
+        .map(|offset| first + f64::from(offset))
+        .take_while(|index| index * step <= max)
+        .map(|index| GridMark {
+            // Adding 0.0 turns -0.0 into 0.0.
+            value: index.mul_add(step, 0.0),
             step_size: step,
-        });
-        index += 1.0;
-    }
-    marks
+        })
+        .collect()
 }
 
 /// Ticks at 0 and 1-2-5 × 10ⁿ on a [`log_axis`]. Zero and powers of ten from 10
 /// get a full decade step; the rest use their gap to the previous tick, so
-/// egui_plot drops crowded intermediate labels first.
+/// `egui_plot` drops crowded intermediate labels first.
 fn log_marks((min, max): (f64, f64)) -> Vec<GridMark> {
     if !min.is_finite() || !max.is_finite() {
         return Vec::new();
@@ -242,8 +243,8 @@ impl Chart<'_> {
             .allow_zoom([true, false])
             .allow_drag([true, false])
             .grid_spacing(GRID_SPACING)
-            .x_grid_spacer(|input| linear_marks(input, X_TICK_POINTS))
-            .y_grid_spacer(move |input| scale.grid_marks(input))
+            .x_grid_spacer(|input| linear_marks(&input, X_TICK_POINTS))
+            .y_grid_spacer(move |input| scale.grid_marks(&input))
             .x_axis_formatter(|mark, _| format!("{:.0}", mark.value + 0.0))
             .y_axis_formatter(move |mark, _| scale.format_tick(mark))
             .x_axis_label("Epoch")
@@ -331,8 +332,8 @@ fn hover_text(
 pub(super) fn plot_height(ui: &egui::Ui, charts: u8) -> f32 {
     let charts = f32::from(charts);
     // Each chart adds a title row and spacing above its plot.
-    let chrome = CHART_TITLE_HEIGHT + 2.0 * ui.spacing().item_spacing.y;
-    ((ui.available_height() - charts * chrome) / charts).max(MIN_PLOT_HEIGHT)
+    let chrome = 2.0f32.mul_add(ui.spacing().item_spacing.y, CHART_TITLE_HEIGHT);
+    (charts.mul_add(-chrome, ui.available_height()) / charts).max(MIN_PLOT_HEIGHT)
 }
 
 pub(super) fn draw_metric_charts(
@@ -465,23 +466,26 @@ mod tests {
     fn linear_ticks_are_round_whole_numbers() {
         // The old chart split 0..=11.7 into quarters: 2.9, 5.8, 8.8.
         assert_eq!(
-            values(&linear_marks(input((-0.6, 12.3), 0.1), 32.0)),
+            values(&linear_marks(&input((-0.6, 12.3), 0.1), 32.0)),
             [0.0, 5.0, 10.0]
         );
         assert_eq!(
-            values(&linear_marks(input((0.0, 39.0), 0.05), 80.0)),
+            values(&linear_marks(&input((0.0, 39.0), 0.05), 80.0)),
             [0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0]
         );
         // Fine zoom never produces fractional conflicts or epochs.
         assert_eq!(
-            values(&linear_marks(input((0.0, 3.0), 0.001), 32.0)),
+            values(&linear_marks(&input((0.0, 3.0), 0.001), 32.0)),
             [0.0, 1.0, 2.0, 3.0]
         );
         assert_eq!(nice_step(3.0, 32.0), 100.0);
         assert_eq!(nice_step(f64::NAN, 32.0), 1.0);
-        assert!(linear_marks(input((f64::NEG_INFINITY, 1.0), 0.1), 32.0).is_empty());
+        assert_eq!(
+            values(&linear_marks(&input((f64::NEG_INFINITY, 1.0), 0.1), 32.0)),
+            Vec::<f64>::new()
+        );
         assert!(
-            linear_marks(input((-0.5, 0.0), 0.1), 32.0)
+            linear_marks(&input((-0.5, 0.0), 0.1), 32.0)
                 .iter()
                 .all(|mark| mark.value.is_sign_positive())
         );
@@ -505,7 +509,7 @@ mod tests {
             .collect();
         assert_eq!(majors, ["0", "10", "100"]);
         assert!(marks.iter().all(|mark| mark.step_size > 0.0));
-        assert!(log_marks((f64::NAN, 1.0)).is_empty());
+        assert_eq!(values(&log_marks((f64::NAN, 1.0))), Vec::<f64>::new());
     }
 
     #[test]
@@ -557,7 +561,7 @@ mod tests {
             text,
             "Best · epoch 10: 1\nRatio · epoch 10: 0.25\nSoft restart at epoch 9"
         );
-        let hidden: ItemIdSet = [ItemId::new(&series[0].label)].into_iter().collect();
+        let hidden: ItemIdSet = std::iter::once(ItemId::new(&series[0].label)).collect();
         let text = hover_text(&series, &markers, &hidden, ChartScale::Percent, 8.0, 0.5);
         assert_eq!(text.as_deref(), Some("Ratio · epoch 10: 25.0%"));
         assert_eq!(

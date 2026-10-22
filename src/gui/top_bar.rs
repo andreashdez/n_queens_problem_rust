@@ -1,5 +1,7 @@
 //! The top bar: the one place for run actions, live progress, and the outcome.
 
+use std::{fmt::Write as _, time::Duration};
+
 use eframe::egui::{self, Align, Layout, RichText, ThemePreference, Vec2};
 
 use super::{
@@ -37,11 +39,13 @@ impl NQueensApp {
         if let Some(error) = &self.error {
             return (format!("Error: {error}"), Some(Tone::Error));
         }
-        self.display_result()
-            .map_or(("Ready".to_owned(), None), |result| {
+        self.display_result().map_or_else(
+            || ("Ready".to_owned(), None),
+            |result| {
                 let (outcome, tone) = run_outcome(result);
                 (outcome, Some(tone))
-            })
+            },
+        )
     }
 
     /// The one place for run actions, live progress, and the outcome.
@@ -130,7 +134,7 @@ impl NQueensApp {
             text.weak()
         });
         ui.ctx()
-            .request_repaint_after_secs((notice.expires_at - now) as f32);
+            .request_repaint_after(Duration::from_secs_f64(notice.expires_at - now));
     }
 }
 
@@ -193,9 +197,9 @@ fn run_progress(metrics: Option<&ga::EpochMetrics>, max_epochs: u32) -> (f32, St
     {
         let rate = f64::from(epoch) * 1_000.0 / f64::from(ms);
         if rate >= 100.0 {
-            text += &format!(" · {rate:.0} epochs/s");
+            let _ = write!(text, " · {rate:.0} epochs/s");
         } else {
-            text += &format!(" · {rate:.1} epochs/s");
+            let _ = write!(text, " · {rate:.1} epochs/s");
         }
     }
     (fraction, text)

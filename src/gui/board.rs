@@ -424,8 +424,8 @@ fn draw_board_cells(
                     board_units(y).mul_add(cell, rect.top()),
                 ),
                 Pos2::new(
-                    rect.left() + board_units(x + 1) * cell,
-                    rect.top() + board_units(y + 1) * cell,
+                    board_units(x + 1).mul_add(cell, rect.left()),
+                    board_units(y + 1).mul_add(cell, rect.top()),
                 ),
             );
             let color = if (x + y) % 2 == 0 { light } else { dark };
@@ -537,7 +537,7 @@ mod tests {
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
             draw_board(ui, &positions, &conflicts, 1, &mut selected, &mut view);
         });
-        assert!(!output.shapes.is_empty());
+        assert_ne!(output.shapes.len(), 0);
         assert!(output.shapes.len() < 30_000);
         output.drop_without_applying_deltas();
     }
@@ -564,9 +564,9 @@ mod tests {
             }
         }
         assert_eq!(attacking_columns(&[0, 2, 1, 3, 4], 1), vec![2]);
-        assert!(attacking_columns(&[1, 3, 0, 2], 0).is_empty());
-        assert!(attacking_columns(&[], 0).is_empty());
-        assert!(attacking_columns(&[0], 5).is_empty());
+        assert_eq!(attacking_columns(&[1, 3, 0, 2], 0), Vec::<usize>::new());
+        assert_eq!(attacking_columns(&[], 0), Vec::<usize>::new());
+        assert_eq!(attacking_columns(&[0], 5), Vec::<usize>::new());
     }
 
     #[test]

@@ -200,11 +200,14 @@ mod tests {
                 let ratio = contrast(palette.queen_label, fill);
                 assert!(ratio >= 3.0, "{name} label on {label} queen: {ratio:.2}");
             }
-            assert!(Palette::of(&context_with(visuals)).queen_label == palette.queen_label);
+            assert_eq!(
+                Palette::of(&context_with(&visuals)).queen_label,
+                palette.queen_label
+            );
         }
     }
 
-    fn context_with(visuals: egui::Visuals) -> egui::Context {
+    fn context_with(visuals: &egui::Visuals) -> egui::Context {
         let ctx = egui::Context::default();
         let theme = if visuals.dark_mode {
             egui::Theme::Dark

@@ -568,7 +568,7 @@ mod tests {
         assert!(app.notice.is_none());
 
         app.notify(&ctx, "Could not export".into(), true);
-        frame_at(&ctx, 2.0 * NOTICE_SECONDS + 1.0, Vec::new(), &mut app);
+        frame_at(&ctx, NOTICE_SECONDS.mul_add(2.0, 1.0), Vec::new(), &mut app);
         assert!(app.notice.is_some());
         frame_at(
             &ctx,
