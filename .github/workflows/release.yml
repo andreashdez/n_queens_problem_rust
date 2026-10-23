@@ -9,10 +9,10 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  macos-app:
-    name: Package the macOS app
-    # Compiling the Icon Composer icon needs Xcode 26 or later.
-    runs-on: macos-26
+  # Creating the release once, before packaging, stops the package jobs racing to create it.
+  release:
+    name: Check the version and create the release
+    runs-on: ubuntu-latest
     permissions:
       contents: write
 
@@ -26,26 +26,64 @@ jobs:
           echo "::error::Tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"
           exit 1
         fi
+    - name: Create the release
+      if: github.ref_type == 'tag'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+          || gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
+
+  package:
+    name: Package for ${{ matrix.platform }}
+    needs: release
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      # One platform failing leaves the others to finish; rerun only the failed job.
+      fail-fast: false
+      matrix:
+        include:
+        # Compiling the Icon Composer icon needs Xcode 26 or later.
+        - platform: macOS
+          os: macos-26
+          script: scripts/bundle-macos.sh
+          artifact: macos-app
+        # The binaries need the runner's glibc or newer, so this is the oldest available runner.
+        - platform: Linux
+          os: ubuntu-22.04
+          script: scripts/package-linux.sh
+          artifact: linux-archive
+        - platform: Windows
+          os: windows-latest
+          script: scripts/package-windows.sh
+          artifact: windows-archive
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - uses: actions/checkout@v4
     - name: Cache Rust dependencies and build output
       uses: Swatinem/rust-cache@v2
       with:
         shared-key: release-${{ runner.os }}
-    - name: Build the app bundle
-      id: bundle
-      run: echo "zip=$(scripts/bundle-macos.sh)" >> "$GITHUB_OUTPUT"
-    # Manual runs keep the app as a workflow artifact for testing.
-    - name: Upload the app as a workflow artifact
+    - name: Build the package
+      id: package
+      env:
+        SCRIPT: ${{ matrix.script }}
+      run: echo "path=$("$SCRIPT")" >> "$GITHUB_OUTPUT"
+    # Manual runs keep the package as a workflow artifact for testing.
+    - name: Upload the package as a workflow artifact
       if: github.ref_type != 'tag'
       uses: actions/upload-artifact@v4
       with:
-        name: macos-app
-        path: ${{ steps.bundle.outputs.zip }}
-    - name: Attach the app to the release
+        name: ${{ matrix.artifact }}
+        path: ${{ steps.package.outputs.path }}
+    - name: Attach the package to the release
       if: github.ref_type == 'tag'
       env:
         GH_TOKEN: ${{ github.token }}
-        ZIP: ${{ steps.bundle.outputs.zip }}
-      run: |
-        gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
-          || gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
-        gh release upload "$GITHUB_REF_NAME" "$ZIP" --clobber
+        PACKAGE: ${{ steps.package.outputs.path }}
+      run: gh release upload "$GITHUB_REF_NAME" "$PACKAGE" --clobber
