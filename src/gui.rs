@@ -37,7 +37,8 @@ pub fn run() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("N-Queens Solver")
             .with_inner_size([1400.0, 900.0])
-            .with_min_inner_size([1000.0, 680.0]),
+            .with_min_inner_size([1000.0, 680.0])
+            .with_icon(app_icon()),
         ..Default::default()
     };
 
@@ -47,6 +48,27 @@ pub fn run() -> eframe::Result<()> {
         native_options,
         Box::new(|cc| Ok(Box::new(NQueensApp::new(cc)))),
     )
+}
+
+/// The window and Dock icon, rendered from `assets/app-icon.svg`.
+///
+/// Inside a macOS `.app`, the bundle's Icon Composer icon applies instead, so
+/// this returns the empty icon, which eframe leaves unset.
+#[cfg(not(target_arch = "wasm32"))]
+fn app_icon() -> egui::IconData {
+    // The executable sits at `<name>.app/Contents/MacOS/<binary>`.
+    let in_app_bundle = cfg!(target_os = "macos")
+        && std::env::current_exe().is_ok_and(|exe| {
+            exe.ancestors()
+                .nth(3)
+                .and_then(std::path::Path::extension)
+                .is_some_and(|extension| extension == "app")
+        });
+    if in_app_bundle {
+        return egui::IconData::default();
+    }
+    eframe::icon_data::from_png_bytes(include_bytes!("../assets/app-icon.png"))
+        .expect("the bundled app icon is a valid PNG")
 }
 
 /// Starts the solver interface in the page's `<canvas>` with id `canvas_id`.

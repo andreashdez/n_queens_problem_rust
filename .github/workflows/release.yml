@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos-app:
+    name: Package the macOS app
+    # Compiling the Icon Composer icon needs Xcode 26 or later.
+    runs-on: macos-26
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Check the tag matches the crate version
+      if: github.ref_type == 'tag'
+      run: |
+        version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+        if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+          echo "::error::Tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"
+          exit 1
+        fi
+    - name: Cache Rust dependencies and build output
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: release-${{ runner.os }}
+    - name: Build the app bundle
+      id: bundle
+      run: echo "zip=$(scripts/bundle-macos.sh)" >> "$GITHUB_OUTPUT"
+    # Manual runs keep the app as a workflow artifact for testing.
+    - name: Upload the app as a workflow artifact
+      if: github.ref_type != 'tag'
+      uses: actions/upload-artifact@v4
+      with:
+        name: macos-app
+        path: ${{ steps.bundle.outputs.zip }}
+    - name: Attach the app to the release
+      if: github.ref_type == 'tag'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        ZIP: ${{ steps.bundle.outputs.zip }}
+      run: |
+        gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+          || gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
+        gh release upload "$GITHUB_REF_NAME" "$ZIP" --clobber

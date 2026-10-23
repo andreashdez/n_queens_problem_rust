@@ -13,7 +13,7 @@ Or [open the GUI in your browser](../demo/) without installing anything. It is t
 
 The GUI runs the solver in the background while you inspect the best board and follow its progress. Settings and current metrics sit on the left, the board in the middle, charts in a resizable panel below it, and run history in a collapsible panel on the right. Start with **Quick demo · 8×8**. A solved run may finish at epoch zero if its initial population already includes a solution.
 
-![N-Queens desktop GUI showing a solved 18×18 board, solver settings, run history, and conflict and population-ratio charts.](../../assets/gui-overview.jpg)
+![N-Queens desktop GUI showing a solved 18×18 board, solver settings, run history, and conflict and population-ratio charts.](../../assets/gui-overview.png)
 
 *Recommended defaults · 18×18, seed 42: solved at epoch 39. Captured on macOS; runtime varies by machine.*
 

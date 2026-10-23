@@ -2,7 +2,7 @@
 
 A genetic algorithm that places N queens on an N×N board without sharing a row, column, or diagonal. Explore the search in a desktop or browser GUI, run seeded experiments from the command line, or use the Rust library.
 
-![N-Queens desktop GUI showing a solved 18×18 board, solver settings, run history, and conflict and population-ratio charts.](website/assets/gui-overview.jpg)
+![N-Queens desktop GUI showing a solved 18×18 board, solver settings, run history, and conflict and population-ratio charts.](website/assets/gui-overview.png)
 
 *Recommended defaults · 18×18, seed 42: solved at epoch 39. Captured on macOS; runtime varies by machine.*
 

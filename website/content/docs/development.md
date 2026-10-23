@@ -1,6 +1,6 @@
 ---
 title: "Development"
-description: "Run the Rust checks, build the web GUI, and work on the Astro documentation site."
+description: "Run the Rust checks, build the web GUI, work on the Astro documentation site, and release the macOS app."
 ---
 
 ## Development checks
@@ -57,7 +57,7 @@ GitHub Actions builds the site with the repository's Pages origin and base path.
 
 ## Update the GUI screenshot
 
-The README, homepage, and GUI guide share `website/assets/gui-overview.jpg`. The current image was captured on macOS from revision `fea5200` using **Recommended defaults · 18×18**, seed **42**, which solved at epoch **39**.
+The README, homepage, and GUI guide share `website/assets/gui-overview.png`. The current image was captured on macOS from revision `674338b` using **Recommended defaults · 18×18**, seed **42**, which solved at epoch **39**.
 
 1. Build and launch the current GUI with `cargo run --release --locked --features gui --bin n_queens_gui`.
 2. Select the recommended preset, set seed 42, and click **Run solver**.
@@ -66,6 +66,29 @@ The README, homepage, and GUI guide share `website/assets/gui-overview.jpg`. The
 5. Run the documentation build and link checks above.
 
 The screenshot records a real run. Its elapsed time is illustrative, not a benchmark.
+
+## Update the app icon
+
+`assets/app-icon.svg` is the source for the logo, drawn with the colors and queen of the board on the docs homepage. The desktop GUI embeds `assets/app-icon.png` as its window and Dock icon when run with Cargo. The macOS app bundle uses `assets/app-icon.icon` instead, made with Icon Composer from the same art. The web GUI and the docs site use `public/favicon.svg`, a simpler queen tile that stays legible at small sizes. After changing the SVG, update the Icon Composer icon to match and render the PNG again:
+
+```bash
+magick -background none assets/app-icon.svg -resize 512x512 -depth 8 -strip assets/app-icon.png
+```
+
+## Release the macOS app
+
+`scripts/bundle-macos.sh` builds the desktop GUI for Apple Silicon and Intel, packages it as `target/macos/N-Queens Solver.app` with the Icon Composer icon, and zips it. It needs macOS with Xcode 26 or later.
+
+To publish a release, set `version` in `Cargo.toml`, then push a matching tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The Release workflow checks that the tag matches the crate version, builds the app on a macOS runner, and attaches `N-Queens-Solver-<version>-macos.zip` to the GitHub release for that tag, creating the release if needed. Running the workflow manually builds the same zip as a workflow artifact without publishing anything.
+
+The app is signed ad hoc, not with an Apple Developer ID, so macOS blocks the first launch of a downloaded copy. Users open it once from **System Settings → Privacy & Security → Open Anyway**.
 
 ## GitHub Wiki sync
 

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg width="100%" height="100%" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:affinity="https://www.affinity.studio/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2;">
+    <g id="fields-light" affinity:id="fields light" transform="matrix(1.505882,0,0,1.505882,-259.011765,-259.011765)">
+        <rect x="172" y="172" width="170" height="170" style="fill:rgb(52,85,78);"/>
+        <rect x="512" y="172" width="170" height="170" style="fill:rgb(52,85,78);"/>
+        <rect x="342" y="342" width="170" height="170" style="fill:rgb(52,85,78);"/>
+        <rect x="682" y="342" width="170" height="170" style="fill:rgb(52,85,78);"/>
+        <rect x="172" y="512" width="170" height="170" style="fill:rgb(52,85,78);"/>
+        <rect x="512" y="512" width="170" height="170" style="fill:rgb(52,85,78);"/>
+        <rect x="342" y="682" width="170" height="170" style="fill:rgb(52,85,78);"/>
+        <rect x="682" y="682" width="170" height="170" style="fill:rgb(52,85,78);"/>
+    </g>
+    <g id="fields-dark" affinity:id="fields dark" transform="matrix(1.505882,0,0,1.505882,-259.011765,-259.011765)">
+        <rect x="342" y="172" width="170" height="170" style="fill:rgb(35,65,57);"/>
+        <rect x="682" y="172" width="170" height="170" style="fill:rgb(35,65,57);"/>
+        <rect x="172" y="342" width="170" height="170" style="fill:rgb(35,65,57);"/>
+        <rect x="512" y="342" width="170" height="170" style="fill:rgb(35,65,57);"/>
+        <rect x="342" y="512" width="170" height="170" style="fill:rgb(35,65,57);"/>
+        <rect x="682" y="512" width="170" height="170" style="fill:rgb(35,65,57);"/>
+        <rect x="172" y="682" width="170" height="170" style="fill:rgb(35,65,57);"/>
+        <rect x="512" y="682" width="170" height="170" style="fill:rgb(35,65,57);"/>
+    </g>
+</svg>

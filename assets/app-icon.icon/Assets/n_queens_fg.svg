@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg width="100%" height="100%" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:affinity="https://www.affinity.studio/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2;">
+    <g id="queen" transform="matrix(18.62069,0,0,18.62069,102.344828,125.62069)">
+        <path d="M10,14L17,20L22,10L27,20L34,14L30,30L14,30L10,14Z" style="fill:rgb(200,239,206);fill-rule:nonzero;"/>
+        <path d="M29.5,33C30.328,33 31,33.672 31,34.5C31,35.328 30.328,36 29.5,36L14.5,36C13.672,36 13,35.328 13,34.5C13,33.672 13.672,33 14.5,33L29.5,33Z" style="fill:rgb(200,239,206);"/>
+        <circle cx="10" cy="12" r="2.5" style="fill:rgb(200,239,206);"/>
+        <circle cx="22" cy="8" r="2.5" style="fill:rgb(200,239,206);"/>
+        <circle cx="34" cy="12" r="2.5" style="fill:rgb(200,239,206);"/>
+    </g>
+</svg>
