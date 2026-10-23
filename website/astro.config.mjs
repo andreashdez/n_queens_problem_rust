@@ -1,9 +1,6 @@
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 
-const configuredSite = process.env.ASTRO_SITE ?? process.env.CI_PAGES_URL;
-const configuredBase = process.env.ASTRO_BASE;
-
 function normalizeBase(base) {
   if (!base || base === "/") {
     return "/";
@@ -15,31 +12,13 @@ function normalizeBase(base) {
     : `${withLeadingSlash}/`;
 }
 
-function baseFromPagesUrl(pagesUrl) {
-  if (!pagesUrl) {
-    return "/";
-  }
-
-  try {
-    return normalizeBase(new URL(pagesUrl).pathname);
-  } catch {
-    return "/";
-  }
-}
-
-const base = configuredBase
-  ? normalizeBase(configuredBase)
-  : baseFromPagesUrl(process.env.CI_PAGES_URL);
-
 export default defineConfig({
-  site: configuredSite ?? "http://localhost:4321",
-  base,
-  // The docs site lives outside `src/`, which holds the Rust crate.
-  srcDir: "./website",
+  site: process.env.ASTRO_SITE ?? "http://localhost:4321",
+  base: normalizeBase(process.env.ASTRO_BASE),
   integrations: [
     starlight({
       title: "N-Queens in Rust",
-      customCss: ["./website/styles/docs.css"],
+      customCss: ["./src/styles/docs.css"],
       social: [
         {
           icon: "github",
@@ -48,7 +27,7 @@ export default defineConfig({
         },
       ],
       editLink: {
-        baseUrl: "https://github.com/andreashdez/n_queens_problem_rust/edit/main/",
+        baseUrl: "https://github.com/andreashdez/n_queens_problem_rust/edit/main/website/",
       },
       sidebar: [
         { label: "Overview", slug: "" },

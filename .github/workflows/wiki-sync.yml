@@ -4,8 +4,8 @@ on:
   push:
     branches: ["main"]
     paths:
-      - "website/content/docs/**"
-      - "scripts/wiki-home.py"
+      - "website/src/content/docs/**"
+      - "website/scripts/wiki-home.py"
       - ".github/workflows/wiki-sync.yml"
   workflow_dispatch:
 
@@ -34,7 +34,7 @@ jobs:
 
           git clone "$WIKI_URL" wiki
 
-          python scripts/wiki-home.py wiki/Home.md
+          python website/scripts/wiki-home.py wiki/Home.md
 
           cd wiki
           git config user.name "github-actions[bot]"

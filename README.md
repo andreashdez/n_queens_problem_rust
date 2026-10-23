@@ -2,7 +2,7 @@
 
 A genetic algorithm that places N queens on an N×N board without sharing a row, column, or diagonal. Explore the search in a desktop or browser GUI, run seeded experiments from the command line, or use the Rust library.
 
-![N-Queens desktop GUI showing a solved 18×18 board, solver settings, run history, and conflict and population-ratio charts.](website/assets/gui-overview.png)
+![N-Queens desktop GUI showing a solved 18×18 board, solver settings, run history, and conflict and population-ratio charts.](website/src/assets/gui-overview.png)
 
 *Recommended defaults · 18×18, seed 42: solved at epoch 39. Captured on macOS; runtime varies by machine.*
 
@@ -63,7 +63,7 @@ cargo test --all-features
 cargo test --all-features --examples
 ```
 
-The documentation source is in [`website/content/docs/`](website/content/docs/). See the [development guide](https://andreashdez.github.io/n_queens_problem_rust/development/) for documentation checks, local preview, benchmarks, and publishing.
+The documentation source is in [`website/src/content/docs/`](website/src/content/docs/). See the [development guide](https://andreashdez.github.io/n_queens_problem_rust/development/) for documentation checks, local preview, benchmarks, and publishing.
 
 ## License
 

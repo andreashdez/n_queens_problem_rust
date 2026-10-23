@@ -1,7 +1,2 @@
 /target
-/node_modules
-/.astro
-/dist
-/public/*
-!/public/favicon.svg
 __pycache__/

@@ -7,8 +7,9 @@ import subprocess
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-DOCS = ROOT / "website/content/docs"
+SITE = Path(__file__).resolve().parents[1]
+ROOT = SITE.parent
+DOCS = SITE / "src/content/docs"
 
 
 def run(command):

@@ -24,6 +24,7 @@ jobs:
       with:
         node-version: 22
         cache: npm
+        cache-dependency-path: website/package-lock.json
     - name: Install rustfmt, clippy, and the web target
       run: |
         rustup component add rustfmt clippy
@@ -47,6 +48,7 @@ jobs:
     - name: Run sweep example tests
       run: cargo test --all-features --examples --verbose
     - name: Install docs dependencies
+      working-directory: website
       run: npm ci
     - name: Install Trunk
       env:
@@ -58,19 +60,25 @@ jobs:
         tar -xzf trunk.tar.gz -C "$HOME/.cargo/bin" trunk
         rm trunk.tar.gz
     - name: Build web GUI
+      working-directory: website
       run: npm run build:gui
     - name: Check docs
+      working-directory: website
       run: npm run check
     - name: Test documentation checks
+      working-directory: website
       run: npm run test:docs
     - name: Verify CLI documentation and examples
+      working-directory: website
       run: npm run check:examples
     - name: Build and check docs at the site root
+      working-directory: website
       env:
         ASTRO_SITE: https://example.test
         ASTRO_BASE: /
       run: npm run build && npm run check:links
     - name: Build and check docs under a repository subpath
+      working-directory: website
       env:
         ASTRO_SITE: https://example.test
         ASTRO_BASE: /docs-test/
