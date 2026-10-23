@@ -1,6 +1,6 @@
 ---
 title: "Development"
-description: "Run the Rust checks, build the web GUI, work on the Astro documentation site, and release the macOS app."
+description: "Run the Rust checks, build the web GUI, work on the Astro documentation site, and release the desktop apps."
 ---
 
 ## Development checks
@@ -76,20 +76,31 @@ The screenshot records a real run. Its elapsed time is illustrative, not a bench
 magick -background none assets/app-icon.svg -resize 512x512 -depth 8 -strip assets/app-icon.png
 ```
 
-## Release the macOS app
+## Release the desktop apps
 
-`scripts/bundle-macos.sh` builds the desktop GUI for Apple Silicon and Intel, packages it as `target/macos/N-Queens Solver.app` with the Icon Composer icon, and zips it. It needs macOS with Xcode 26 or later.
+Each platform has a packaging script:
+
+| Script | Needs | Writes |
+| --- | --- | --- |
+| `scripts/bundle-macos.sh` | macOS with Xcode 26 or later | `N-Queens-Solver-<version>-macos.zip`: a universal `N-Queens Solver.app` with the Icon Composer icon |
+| `scripts/package-linux.sh` | Linux | `N-Queens-Solver-<version>-linux-<arch>.tar.gz`: the GUI and CLI binaries, a `.desktop` file, the icon, and install notes |
+| `scripts/package-windows.sh` | Windows with the MSVC toolchain, Git Bash, and 7-Zip | `N-Queens-Solver-<version>-windows-<arch>.zip`: the GUI and CLI executables, with the C runtime linked statically |
+
+Each script writes into `target/macos/`, `target/linux/`, or `target/windows/` and prints the path of the archive.
 
 To publish a release, set `version` in `Cargo.toml`, then push a matching tag:
 
 ```bash
-git tag v0.1.0
+git tag -a v0.1.0 -m "v0.1.0"
 git push origin v0.1.0
 ```
 
-The Release workflow checks that the tag matches the crate version, builds the app on a macOS runner, and attaches `N-Queens-Solver-<version>-macos.zip` to the GitHub release for that tag, creating the release if needed. Running the workflow manually builds the same zip as a workflow artifact without publishing anything.
+The Release workflow checks that the tag matches the crate version and creates the GitHub release for that tag if it does not exist yet. It then packages each platform on its own runner and attaches the archives. The Linux job runs on the oldest available Ubuntu runner, because the binaries need its glibc or newer. If one platform fails, the others still finish, and you can rerun only the failed job. Running the workflow manually builds the same archives as workflow artifacts without publishing anything.
 
-The app is signed ad hoc, not with an Apple Developer ID, so macOS blocks the first launch of a downloaded copy. Users open it once from **System Settings → Privacy & Security → Open Anyway**.
+None of the apps are signed with a paid certificate, so each system warns on the first launch of a downloaded copy:
+
+- **macOS** blocks the ad hoc signed app. Users open it once from **System Settings → Privacy & Security → Open Anyway**.
+- **Windows** SmartScreen shows "Windows protected your PC". Users click **More info**, then **Run anyway**.
 
 ## GitHub Wiki sync
 
