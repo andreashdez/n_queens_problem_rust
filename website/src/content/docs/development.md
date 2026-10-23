@@ -33,7 +33,7 @@ cargo clippy --lib --bins --features gui --target wasm32-unknown-unknown -- \
 
 ## Work on the docs
 
-The site uses Astro and Starlight. With Node.js 22.23.4 or newer, npm, Python 3.10+, and Rust installed, run from `website/`:
+The site uses Astro and Starlight. With Node.js 24 LTS (Astro needs 22.23.4 or newer), npm, Python 3.10+, and Rust installed, run from `website/`:
 
 ```bash
 cd website
