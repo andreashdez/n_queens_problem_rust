@@ -1,9 +1,19 @@
 ---
 title: "Getting started"
-description: "Build the project and run your first seeded N-Queens experiment."
+description: "Download the desktop app, or build the project and run your first seeded N-Queens experiment."
 ---
 
 Start with a small board, then choose the desktop interface or command line for your next experiment.
+
+## Download instead of building
+
+To use the desktop app without installing Rust, download it for macOS, Linux, or Windows from the [latest release](https://github.com/andreashdez/n_queens_problem_rust/releases/latest). The Linux and Windows archives also include the command-line solver. The apps are not signed with a paid certificate, so the first launch needs one extra step:
+
+- **macOS:** open the app once, then allow it under **System Settings → Privacy & Security → Open Anyway**.
+- **Windows:** when SmartScreen shows "Windows protected your PC", click **More info**, then **Run anyway**.
+- **Linux:** extract the archive and run `./n_queens_gui`. The included `README.txt` explains how to add it to your application menu. The GUI needs OpenGL.
+
+Then continue with the [GUI guide](../gui/). To build from source, which the CLI examples below use, follow the steps on this page.
 
 ## 1. Get the project
 

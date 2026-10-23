@@ -8,9 +8,17 @@ A genetic algorithm that places N queens on an N×N board without sharing a row,
 
 [Documentation](https://andreashdez.github.io/n_queens_problem_rust/) · [GUI guide](https://andreashdez.github.io/n_queens_problem_rust/gui/) · [CLI reference](https://andreashdez.github.io/n_queens_problem_rust/cli/)
 
+## Download
+
+Download the desktop app for macOS, Linux, or Windows from the [latest release](https://github.com/andreashdez/n_queens_problem_rust/releases/latest). The Linux and Windows archives also include the command-line solver. The apps are not signed with a paid certificate, so the first launch needs one extra step:
+
+- **macOS:** open the app once, then allow it under **System Settings → Privacy & Security → Open Anyway**.
+- **Windows:** when SmartScreen shows "Windows protected your PC", click **More info**, then **Run anyway**.
+- **Linux:** extract the archive and run `./n_queens_gui`. The included `README.txt` explains how to add it to your application menu. The GUI needs OpenGL.
+
 ## Get started
 
-You need Git and Rust with Cargo. The repository selects stable Rust through `rust-toolchain.toml`. The GUI also needs a desktop session with a graphics backend. The first build downloads and compiles dependencies.
+To build from source, you need Git and Rust with Cargo. The repository selects stable Rust through `rust-toolchain.toml`. The GUI also needs a desktop session with a graphics backend. The first build downloads and compiles dependencies.
 
 ```bash
 git clone https://github.com/andreashdez/n_queens_problem_rust.git
