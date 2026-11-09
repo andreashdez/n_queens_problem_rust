@@ -1,0 +1,306 @@
+// The board panel: the zoomable board image, coordinates, attacker counts and the selection.
+
+import { Button, Palette } from "std-widgets.slint";
+import { AppColors, Heading, Label, Separator, Weak } from "theme.slint";
+
+// Text drawn over or around the board, in board-area coordinates.
+export struct BoardText {
+    x: length,
+    y: length,
+    width: length,
+    text: string,
+    color: color,
+    size: length,
+    // Right-aligned rather than centred.
+    right: bool,
+}
+
+export global BoardState {
+    in property <bool> has-board;
+    in property <string> summary;
+    in property <string> empty-text;
+    in property <string> zoom-label: "100%";
+    in property <bool> can-zoom-in;
+    in property <bool> can-zoom-out;
+    in property <[string]> help;
+
+    // Where the square board viewport lies in the board area.
+    in property <length> viewport-x;
+    in property <length> viewport-y;
+    in property <length> viewport-side;
+    in property <image> image;
+    in property <[BoardText]> coordinates;
+    // Relative to the viewport.
+    in property <[BoardText]> queen-labels;
+
+    in property <string> hover-text;
+    in property <bool> hovering-queen;
+
+    in property <bool> has-selection;
+    in property <length> selection-height: 44px;
+    in property <string> selection-title;
+    in property <string> selection-details;
+
+    // Coordinates are in logical pixels of the board area.
+    callback area-resized(length, length);
+    callback hover(length, length);
+    callback drag(length, length);
+    callback click(length, length);
+    callback zoom-at(float, length, length);
+    callback zoom-in();
+    callback zoom-out();
+    callback fit();
+    callback clear-selection();
+}
+
+export component Board inherits VerticalLayout {
+    padding: 8px;
+    spacing: 6px;
+
+    help := PopupWindow {
+        x: 0;
+        y: 36px;
+        width: 320px;
+        Rectangle {
+            background: Palette.alternate-background;
+            border-color: Palette.border;
+            border-width: 1px;
+            border-radius: 6px;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+                for line in BoardState.help: Text {
+                    text: line;
+                    wrap: word-wrap;
+                    color: line == "" ? Palette.border : Palette.foreground;
+                    font-size: line == "" ? 4px : 13px;
+                }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        Heading {
+            text: "Board";
+        }
+        if BoardState.has-board: Label {
+            text: BoardState.summary;
+        }
+        if BoardState.has-board: Button {
+            text: "−";
+            enabled: BoardState.can-zoom-out;
+            clicked => {
+                BoardState.zoom-out();
+            }
+            Tooltip {
+                text: @markdown("Zoom out");
+            }
+        }
+        if BoardState.has-board: Button {
+            text: "+";
+            enabled: BoardState.can-zoom-in;
+            clicked => {
+                BoardState.zoom-in();
+            }
+            Tooltip {
+                text: @markdown("Zoom in");
+            }
+        }
+        if BoardState.has-board: Label {
+            text: BoardState.zoom-label;
+            min-width: 48px;
+            horizontal-alignment: center;
+        }
+        if BoardState.has-board: Button {
+            text: "Fit";
+            clicked => {
+                BoardState.fit();
+            }
+            Tooltip {
+                text: @markdown("Fit the whole board");
+            }
+        }
+        if BoardState.has-board: Button {
+            text: "Help";
+            clicked => {
+                help.show();
+            }
+        }
+    }
+
+    board-area := Rectangle {
+        vertical-stretch: 1;
+        min-height: 200px;
+        changed width => {
+            BoardState.area-resized(self.width, self.height);
+        }
+        changed height => {
+            BoardState.area-resized(self.width, self.height);
+        }
+        init => {
+            BoardState.area-resized(self.width, self.height);
+        }
+
+        if !BoardState.has-board: Rectangle {
+            x: BoardState.viewport-x;
+            y: BoardState.viewport-y;
+            width: BoardState.viewport-side;
+            height: BoardState.viewport-side;
+            background: AppColors.empty-board;
+            Text {
+                text: BoardState.empty-text;
+                font-size: 18px;
+                color: AppColors.empty-board-text;
+            }
+        }
+
+        if BoardState.has-board: Image {
+            x: BoardState.viewport-x;
+            y: BoardState.viewport-y;
+            width: BoardState.viewport-side;
+            height: BoardState.viewport-side;
+            source: BoardState.image;
+            image-fit: fill;
+            accessible-role: image;
+            accessible-label: "Board: " + BoardState.summary;
+        }
+
+        for label in BoardState.coordinates: Text {
+            x: label.x;
+            y: label.y;
+            width: label.width;
+            height: 14px;
+            text: label.text;
+            color: label.color;
+            font-size: label.size;
+            horizontal-alignment: label.right ? TextHorizontalAlignment.right : TextHorizontalAlignment.center;
+            vertical-alignment: center;
+        }
+
+        if BoardState.has-board: Rectangle {
+            x: BoardState.viewport-x;
+            y: BoardState.viewport-y;
+            width: BoardState.viewport-side;
+            height: BoardState.viewport-side;
+            clip: true;
+
+            for label in BoardState.queen-labels: Text {
+                x: label.x - label.width / 2;
+                y: label.y - label.size;
+                width: label.width;
+                height: 2 * label.size;
+                text: label.text;
+                color: label.color;
+                font-size: label.size;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            gesture := ScaleRotateGestureHandler {
+                property <float> last-scale: 1;
+                started => {
+                    self.last-scale = 1;
+                }
+                updated => {
+                    BoardState.zoom-at(self.scale / self.last-scale, self.center.x + BoardState.viewport-x, self.center.y + BoardState.viewport-y);
+                    self.last-scale = self.scale;
+                }
+
+                touch := TouchArea {
+                    property <length> last-x;
+                    property <length> last-y;
+                    property <bool> dragged;
+                    mouse-cursor: self.pressed && self.dragged ? MouseCursor.grabbing : BoardState.hovering-queen ? MouseCursor.pointer : MouseCursor.default;
+                    pointer-event(event) => {
+                        if (event.kind == PointerEventKind.down) {
+                            self.dragged = false;
+                            self.last-x = self.mouse-x;
+                            self.last-y = self.mouse-y;
+                        }
+                    }
+                    moved => {
+                        if (!self.dragged && (abs(self.mouse-x - self.pressed-x) > 3px || abs(self.mouse-y - self.pressed-y) > 3px)) {
+                            self.dragged = true;
+                        }
+                        if (self.dragged) {
+                            BoardState.drag(self.mouse-x - self.last-x, self.mouse-y - self.last-y);
+                            self.last-x = self.mouse-x;
+                            self.last-y = self.mouse-y;
+                        }
+                    }
+                    changed mouse-x => {
+                        BoardState.hover(self.mouse-x + BoardState.viewport-x, self.mouse-y + BoardState.viewport-y);
+                    }
+                    changed mouse-y => {
+                        BoardState.hover(self.mouse-x + BoardState.viewport-x, self.mouse-y + BoardState.viewport-y);
+                    }
+                    changed has-hover => {
+                        if (!self.has-hover) {
+                            BoardState.hover(-1px, -1px);
+                        }
+                    }
+                    clicked => {
+                        if (!self.dragged) {
+                            BoardState.click(self.mouse-x + BoardState.viewport-x, self.mouse-y + BoardState.viewport-y);
+                        }
+                    }
+                    scroll-event(event) => {
+                        // Ctrl on every platform, and Cmd on macOS, which Slint reports as control.
+                        if (event.modifiers.control || event.modifiers.meta) {
+                            BoardState.zoom-at(pow(1.002, event.delta-y / 1px), self.mouse-x + BoardState.viewport-x, self.mouse-y + BoardState.viewport-y);
+                        } else {
+                            BoardState.drag(event.delta-x, event.delta-y);
+                        }
+                        accept
+                    }
+                }
+            }
+
+            if BoardState.hover-text != "" && touch.has-hover && !touch.pressed: Rectangle {
+                x: min(touch.mouse-x + 14px, parent.width - self.width - 4px);
+                y: min(touch.mouse-y + 18px, parent.height - self.height - 4px);
+                width: tip.preferred-width + 18px;
+                height: tip.preferred-height + 12px;
+                background: Palette.alternate-background;
+                border-color: Palette.border;
+                border-width: 1px;
+                border-radius: 4px;
+                tip := Text {
+                    text: BoardState.hover-text;
+                    color: Palette.foreground;
+                }
+            }
+        }
+
+    }
+
+    // Fixed height so selecting a queen never resizes the board.
+    Rectangle {
+        height: BoardState.selection-height;
+        if BoardState.has-selection: VerticalLayout {
+            spacing: 2px;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                Label {
+                    text: BoardState.selection-title;
+                    color: AppColors.selected-queen;
+                }
+                Button {
+                    text: "Clear selection";
+                    height: 22px;
+                    clicked => {
+                        BoardState.clear-selection();
+                    }
+                }
+            }
+            Label {
+                text: BoardState.selection-details;
+                wrap: word-wrap;
+                font-size: 12px;
+            }
+        }
+    }
+}

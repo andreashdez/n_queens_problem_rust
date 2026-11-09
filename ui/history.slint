@@ -1,0 +1,171 @@
+// The right panel: saved runs, with their actions and comparison marks.
+
+import { Button, Palette, ScrollView } from "std-widgets.slint";
+import { Chip, Disclosure, Heading, Label, Separator, Weak } from "theme.slint";
+
+export struct SavedRunItem {
+    id: int,
+    title: string,
+    stop-reason: string,
+    summary: string,
+    settings: [string],
+    viewed: bool,
+    marked-a: bool,
+    marked-b: bool,
+}
+
+export global HistoryState {
+    in property <string> caption;
+    in property <string> empty-text;
+    in property <bool> viewing-saved;
+    in property <bool> running;
+    in property <bool> has-runs;
+    in property <[SavedRunItem]> runs;
+
+    callback view(int);
+    callback view-current();
+    // Slot 0 is A, slot 1 is B.
+    callback mark(int, int);
+    callback rerun(int);
+    callback copy-command(int);
+    callback export(int);
+}
+
+component SavedRunCard inherits VerticalLayout {
+    in property <SavedRunItem> run;
+    property <bool> settings-open;
+
+    spacing: 4px;
+    HorizontalLayout {
+        spacing: 4px;
+        Chip {
+            text: root.run.title;
+            selected: root.run.viewed;
+            clicked => {
+                HistoryState.view(root.run.id);
+            }
+            Tooltip {
+                text: @markdown("Show this run's board and charts");
+            }
+        }
+        Label {
+            text: root.run.stop-reason;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        Chip {
+            text: "A";
+            selected: root.run.marked-a;
+            clicked => {
+                HistoryState.mark(0, root.run.id);
+            }
+            Tooltip {
+                text: @markdown("Select comparison A");
+            }
+        }
+        Chip {
+            text: "B";
+            selected: root.run.marked-b;
+            clicked => {
+                HistoryState.mark(1, root.run.id);
+            }
+            Tooltip {
+                text: @markdown("Select comparison B");
+            }
+        }
+    }
+    Label {
+        text: root.run.summary;
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        alignment: start;
+        Disclosure {
+            text: "Settings";
+            open <=> root.settings-open;
+        }
+    }
+    if root.settings-open: VerticalLayout {
+        padding-left: 12px;
+        spacing: 2px;
+        for line in root.run.settings: Weak {
+            text: line;
+            wrap: word-wrap;
+        }
+    }
+    HorizontalLayout {
+        spacing: 4px;
+        alignment: start;
+        Button {
+            text: "Rerun";
+            enabled: !HistoryState.running;
+            clicked => {
+                HistoryState.rerun(root.run.id);
+            }
+            Tooltip {
+                text: @markdown("Run these settings again");
+            }
+        }
+        Button {
+            text: "Copy CLI command";
+            clicked => {
+                HistoryState.copy-command(root.run.id);
+            }
+            Tooltip {
+                text: @markdown("Copy a command to run from this project's directory");
+            }
+        }
+    }
+    HorizontalLayout {
+        spacing: 4px;
+        alignment: start;
+        Button {
+            text: "Export metrics";
+            clicked => {
+                HistoryState.export(root.run.id);
+            }
+            Tooltip {
+                text: @markdown("Save this run's retained metrics as CSV");
+            }
+        }
+    }
+    Separator { }
+}
+
+export component History inherits Rectangle {
+    Rectangle {
+        x: 0;
+        width: 1px;
+        background: Palette.border;
+    }
+
+    scroll := ScrollView {
+        VerticalLayout {
+            // Wrap to the panel's width instead of scrolling sideways.
+            width: scroll.visible-width;
+            padding: 12px;
+            spacing: 8px;
+            alignment: start;
+            Heading {
+                text: "Run history";
+            }
+            Weak {
+                text: HistoryState.caption;
+                wrap: word-wrap;
+            }
+            if !HistoryState.has-runs: Label {
+                text: HistoryState.empty-text;
+                wrap: word-wrap;
+            }
+            if HistoryState.viewing-saved: Button {
+                text: "View current run";
+                clicked => {
+                    HistoryState.view-current();
+                }
+            }
+            for run in HistoryState.runs: SavedRunCard {
+                run: run;
+            }
+        }
+    }
+}

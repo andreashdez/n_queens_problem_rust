@@ -1,5 +1,5 @@
 pub mod ga;
-#[cfg(feature = "gui")]
+#[cfg(feature = "gui-common")]
 pub mod gui;
 pub mod min_conflicts;
 mod solver;

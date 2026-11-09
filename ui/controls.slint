@@ -1,0 +1,453 @@
+// The left panel: run settings and the metrics of the run on the board.
+
+import { Button, CheckBox, ComboBox, LineEdit, Palette, ScrollView, Slider, SpinBox } from "std-widgets.slint";
+import { AppColors, Chip, Disclosure, Heading, Label, Separator, Strong, Weak } from "theme.slint";
+
+export struct MetricRow {
+    label: string,
+    value: string,
+}
+
+// The run settings, two-way bound to the controls. Rust reads them all back on
+// `settings-edited` and writes the cleaned-up values here again.
+export global ControlsState {
+    in property <bool> running;
+    in property <[string]> presets;
+    // Two-way, because the ComboBox writes its own index and would drop a one-way binding.
+    in-out property <int> preset-index;
+
+    // 0: genetic algorithm, 1: min-conflicts.
+    in-out property <int> solver;
+    in-out property <int> board-size: 18;
+    in-out property <string> seed-text;
+    in property <bool> seed-valid: true;
+    in-out property <bool> seed-has-focus;
+    in property <string> seed-help;
+    in property <string> budget-summary;
+
+    in-out property <int> population-size;
+    in-out property <int> max-epochs;
+    in-out property <float> mutation-rate;
+    in-out property <float> elite-ratio;
+    in-out property <float> offspring-ratio;
+    in-out property <float> min-diversity-ratio;
+    // 0: roulette, 1: tournament.
+    in-out property <int> selection;
+    in-out property <int> tournament-size;
+    in-out property <float> local-search-rate;
+    in-out property <int> local-search-attempts;
+    in-out property <bool> allow-unsolvable;
+
+    in property <string> metrics-title: "Current run";
+    in property <bool> has-metrics;
+    in property <[MetricRow]> metrics;
+    in property <[string]> metrics-footer;
+
+    callback choose-preset(int);
+    callback settings-edited();
+    callback seed-edited();
+    callback seed-focus-changed();
+    callback randomize-seed();
+}
+
+// A 0–1 setting with its name and value.
+component RatioSlider inherits VerticalLayout {
+    in property <string> label;
+    in property <string> help;
+    in property <bool> enabled: true;
+    in-out property <float> value;
+    callback edited();
+
+    spacing: 2px;
+    HorizontalLayout {
+        Label {
+            text: root.label;
+            Tooltip {
+                text: @markdown("\{root.help}");
+            }
+        }
+        Weak {
+            text: round(root.value * 1000) / 1000;
+            horizontal-alignment: right;
+        }
+    }
+    Slider {
+        minimum: 0;
+        maximum: 1;
+        step: 0.01;
+        enabled: root.enabled;
+        value <=> root.value;
+        changed => {
+            root.edited();
+        }
+    }
+}
+
+// A labelled whole-number field.
+component NumberField inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> help;
+    in property <bool> enabled: true;
+    in property <int> minimum: 1;
+    in property <int> maximum: 2147483647;
+    in property <int> step-size: 1;
+    in-out property <int> value;
+    callback edited();
+
+    spacing: 12px;
+    Label {
+        text: root.label;
+        min-width: 110px;
+        Tooltip {
+            text: @markdown("\{root.help}");
+        }
+    }
+    SpinBox {
+        min-width: 0px;
+        horizontal-stretch: 1;
+        minimum: root.minimum;
+        maximum: root.maximum;
+        step-size: root.step-size;
+        enabled: root.enabled;
+        value <=> root.value;
+        edited => {
+            root.edited();
+        }
+    }
+}
+
+component UnsolvableCheckBox inherits CheckBox {
+    text: "Experiment on unsolvable boards";
+    checked <=> ControlsState.allow-unsolvable;
+    toggled => {
+        ControlsState.settings-edited();
+    }
+    Tooltip {
+        text: @markdown("Let sizes 2 and 3 keep searching for experiments instead of stopping straight away.");
+    }
+}
+
+component GaSettings inherits VerticalLayout {
+    in property <bool> enabled: true;
+    spacing: 8px;
+    Weak {
+        text: "Tune search effort and exploration.";
+    }
+    NumberField {
+        label: "Population";
+        help: "Number of candidate boards. Larger populations require more time and memory.";
+        step-size: 100;
+        enabled: root.enabled;
+        value <=> ControlsState.population-size;
+        edited => {
+            ControlsState.settings-edited();
+        }
+    }
+    NumberField {
+        label: "Max epochs";
+        help: "Stop after this many generations if no solution is found.";
+        step-size: 50;
+        enabled: root.enabled;
+        value <=> ControlsState.max-epochs;
+        edited => {
+            ControlsState.settings-edited();
+        }
+    }
+    Strong {
+        text: "Exploration";
+    }
+    RatioSlider {
+        label: "Mutation";
+        help: "Chance of swapping two queens in a non-elite board. Automatically increases during stagnation.";
+        enabled: root.enabled;
+        value <=> ControlsState.mutation-rate;
+        edited => {
+            ControlsState.settings-edited();
+        }
+    }
+    RatioSlider {
+        label: "Elite fraction";
+        help: "Fraction of the strongest boards protected from mutation and kept as survivors.";
+        enabled: root.enabled;
+        value <=> ControlsState.elite-ratio;
+        edited => {
+            ControlsState.settings-edited();
+        }
+    }
+    RatioSlider {
+        label: "Offspring";
+        help: "New children per generation, as a fraction of the target population.";
+        enabled: root.enabled;
+        value <=> ControlsState.offspring-ratio;
+        edited => {
+            ControlsState.settings-edited();
+        }
+    }
+    RatioSlider {
+        label: "Min diversity";
+        help: "If too few boards are unique, refresh some non-elite boards with random permutations.";
+        enabled: root.enabled;
+        value <=> ControlsState.min-diversity-ratio;
+        edited => {
+            ControlsState.settings-edited();
+        }
+    }
+    Strong {
+        text: "Parent selection";
+    }
+    HorizontalLayout {
+        spacing: 4px;
+        alignment: start;
+        Chip {
+            text: "Roulette";
+            enabled: root.enabled;
+            selected: ControlsState.selection == 0;
+            clicked => {
+                ControlsState.selection = 0;
+                ControlsState.settings-edited();
+            }
+            Tooltip {
+                text: @markdown("Sample parents with probability weighted by fitness.");
+            }
+        }
+        Chip {
+            text: "Tournament";
+            enabled: root.enabled;
+            selected: ControlsState.selection == 1;
+            clicked => {
+                ControlsState.selection = 1;
+                ControlsState.settings-edited();
+            }
+            Tooltip {
+                text: @markdown("Choose the strongest board among a random sample of candidates.");
+            }
+        }
+    }
+    NumberField {
+        label: "Tournament size";
+        help: "More candidates increase selection pressure, which can reduce diversity.";
+        enabled: root.enabled && ControlsState.selection == 1;
+        value <=> ControlsState.tournament-size;
+        edited => {
+            ControlsState.settings-edited();
+        }
+    }
+    Strong {
+        text: "Local search";
+    }
+    RatioSlider {
+        label: "Fraction";
+        help: "Try improving swaps on this fraction of non-elite boards. Zero disables local search.";
+        enabled: root.enabled;
+        value <=> ControlsState.local-search-rate;
+        edited => {
+            ControlsState.settings-edited();
+        }
+    }
+    NumberField {
+        label: "Swap attempts";
+        help: "Number of trial swaps for each selected board; only improvements are kept.";
+        minimum: 0;
+        enabled: root.enabled && ControlsState.local-search-rate > 0;
+        value <=> ControlsState.local-search-attempts;
+        edited => {
+            ControlsState.settings-edited();
+        }
+    }
+    Separator { }
+    UnsolvableCheckBox {
+        enabled: root.enabled;
+    }
+}
+
+// Min-conflicts repairs a single board, so only its pass budget applies.
+component MinConflictsSettings inherits VerticalLayout {
+    in property <bool> enabled: true;
+    spacing: 8px;
+    Weak {
+        text: "Min-conflicts has no population or rates to tune.";
+        wrap: word-wrap;
+    }
+    NumberField {
+        label: "Max passes";
+        help: "Stop after this many repair passes, across restarts, if no solution is found.";
+        step-size: 50;
+        enabled: root.enabled;
+        value <=> ControlsState.max-epochs;
+        edited => {
+            ControlsState.settings-edited();
+        }
+    }
+    Separator { }
+    UnsolvableCheckBox {
+        enabled: root.enabled;
+    }
+}
+
+export component Controls inherits Rectangle {
+    property <bool> advanced-open;
+
+    scroll := ScrollView {
+        VerticalLayout {
+            // Wrap to the panel's width instead of scrolling sideways.
+            width: scroll.visible-width;
+            padding: 12px;
+            spacing: 8px;
+            alignment: start;
+
+            Heading {
+                text: "Set up a run";
+            }
+            Label {
+                text: "Preset";
+            }
+            ComboBox {
+                // Long preset names are cut short rather than widening the panel.
+                min-width: 0px;
+                enabled: !ControlsState.running;
+                model: ControlsState.presets;
+                current-index <=> ControlsState.preset-index;
+                selected => {
+                    ControlsState.choose-preset(self.current-index);
+                }
+            }
+
+            Label {
+                text: "Solver";
+            }
+            HorizontalLayout {
+                spacing: 4px;
+                alignment: start;
+                Chip {
+                    text: "Genetic algorithm";
+                    enabled: !ControlsState.running;
+                    selected: ControlsState.solver == 0;
+                    clicked => {
+                        ControlsState.solver = 0;
+                        ControlsState.settings-edited();
+                    }
+                    Tooltip {
+                        text: @markdown("Evolve a population of boards.");
+                    }
+                }
+                Chip {
+                    text: "Min-conflicts";
+                    enabled: !ControlsState.running;
+                    selected: ControlsState.solver == 1;
+                    clicked => {
+                        ControlsState.solver = 1;
+                        ControlsState.settings-edited();
+                    }
+                    Tooltip {
+                        text: @markdown("Repair a single board with improving swaps: a fast baseline for comparison.");
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: 12px;
+                Label {
+                    text: "Board size";
+                    min-width: 80px;
+                    Tooltip {
+                        text: @markdown("One queen per row and column. Sizes 2 and 3 have no solution.");
+                    }
+                }
+                SpinBox {
+                    min-width: 0px;
+                    horizontal-stretch: 1;
+                    minimum: 1;
+                    maximum: 65535;
+                    enabled: !ControlsState.running;
+                    value <=> ControlsState.board-size;
+                    edited => {
+                        ControlsState.settings-edited();
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: 12px;
+                Label {
+                    text: "Seed";
+                    min-width: 80px;
+                    Tooltip {
+                        text: @markdown("\{ControlsState.seed-help}");
+                    }
+                }
+                seed := LineEdit {
+                    min-width: 0px;
+                    horizontal-stretch: 1;
+                    enabled: !ControlsState.running;
+                    text <=> ControlsState.seed-text;
+                    edited => {
+                        ControlsState.seed-edited();
+                    }
+                    changed has-focus => {
+                        ControlsState.seed-has-focus = self.has-focus;
+                        ControlsState.seed-focus-changed();
+                    }
+                }
+                Button {
+                    text: "Random";
+                    enabled: !ControlsState.running;
+                    clicked => {
+                        ControlsState.randomize-seed();
+                    }
+                    Tooltip {
+                        text: @markdown("Choose a new seed");
+                    }
+                }
+            }
+            if !ControlsState.seed-valid: Text {
+                text: ControlsState.seed-help;
+                color: AppColors.error-text;
+                wrap: word-wrap;
+            }
+            Weak {
+                text: ControlsState.budget-summary;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                alignment: start;
+                Disclosure {
+                    text: "Advanced settings";
+                    open <=> root.advanced-open;
+                }
+            }
+            if root.advanced-open && ControlsState.solver == 0: GaSettings {
+                enabled: !ControlsState.running;
+            }
+            if root.advanced-open && ControlsState.solver == 1: MinConflictsSettings {
+                enabled: !ControlsState.running;
+            }
+
+            Separator { }
+            Strong {
+                text: ControlsState.metrics-title;
+            }
+            if !ControlsState.has-metrics: Label {
+                text: "No metrics yet.";
+            }
+            for row in ControlsState.metrics: HorizontalLayout {
+                spacing: 12px;
+                Label {
+                    text: row.label;
+                    horizontal-stretch: 1;
+                }
+                Label {
+                    text: row.value;
+                    horizontal-alignment: right;
+                }
+            }
+            for line in ControlsState.metrics-footer: Label {
+                text: line;
+            }
+        }
+    }
+
+    Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        background: Palette.border;
+    }
+}

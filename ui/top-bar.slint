@@ -1,0 +1,196 @@
+// The top bar: the one place for run actions, live progress and the outcome.
+
+import { AboutSlint, Button, Palette, ProgressIndicator } from "std-widgets.slint";
+import { AppColors, Chip, Label, Separator, Strong, Weak } from "theme.slint";
+
+export global TopBarState {
+    in property <bool> running;
+    in property <bool> cancel-requested;
+    // Share of the budget used, its label, and what one step is called.
+    in property <float> progress;
+    in property <string> progress-text;
+    in property <string> step-name: "epoch";
+    in property <string> status: "Ready";
+    // Outcomes are colored; other statuses use the text color.
+    in property <bool> status-toned;
+    in property <color> status-color;
+    in property <string> notice;
+    in property <bool> notice-is-error;
+    in property <int> history-count;
+    in property <bool> show-history: true;
+    // 0: follow the system, 1: dark, 2: light.
+    in property <int> theme;
+
+    callback run();
+    callback cancel();
+    callback toggle-history();
+    callback choose-theme(int);
+}
+
+export component TopBar inherits Rectangle {
+    min-height: 44px;
+    background: Palette.alternate-background;
+
+    about := PopupWindow {
+        x: root.width - 380px;
+        y: root.height;
+        width: 360px;
+        Rectangle {
+            background: Palette.background;
+            border-color: Palette.border;
+            border-width: 1px;
+            border-radius: 6px;
+            VerticalLayout {
+                padding: 16px;
+                spacing: 8px;
+                Strong {
+                    text: "N-Queens Solver";
+                    font-size: 16px;
+                }
+                Label {
+                    text: "Solves the N-Queens problem with a genetic algorithm or min-conflicts repair.";
+                    wrap: word-wrap;
+                }
+                AboutSlint { }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        spacing: 8px;
+        alignment: stretch;
+
+        if !TopBarState.running: Button {
+            min-width: 120px;
+            text: "Run solver";
+            primary: true;
+            clicked => {
+                TopBarState.run();
+            }
+            Tooltip {
+                text: @markdown("Start a run with the settings on the left (Ctrl/Cmd+Enter)");
+            }
+        }
+        if TopBarState.running: Button {
+            min-width: 120px;
+            text: TopBarState.cancel-requested ? "Cancelling…" : "Cancel run";
+            enabled: !TopBarState.cancel-requested;
+            clicked => {
+                TopBarState.cancel();
+            }
+            Tooltip {
+                text: @markdown("\{"Stop after the current " + TopBarState.step-name + " (Esc)"}");
+            }
+        }
+        if TopBarState.running: Rectangle {
+            width: 260px;
+            ProgressIndicator {
+                y: parent.height - self.height;
+                height: 4px;
+                progress: TopBarState.progress;
+            }
+            Label {
+                y: 0;
+                height: parent.height - 6px;
+                text: TopBarState.progress-text;
+                font-size: 12px;
+            }
+            Tooltip {
+                text: @markdown("\{"Share of the " + TopBarState.step-name + " budget used; a solution can stop the run early."}");
+            }
+        }
+
+        Separator {
+            vertical: true;
+        }
+        status := Label {
+            text: TopBarState.status;
+            color: TopBarState.status-toned ? TopBarState.status-color : Palette.foreground;
+            horizontal-stretch: 1;
+            overflow: elide;
+            accessible-role: text;
+            accessible-label: "Status: " + self.text;
+        }
+
+        if TopBarState.notice != "": Label {
+            text: TopBarState.notice;
+            color: TopBarState.notice-is-error ? AppColors.error-text : Palette.foreground.transparentize(0.35);
+            overflow: elide;
+            horizontal-stretch: 1;
+            horizontal-alignment: right;
+        }
+        if TopBarState.notice != "": Separator {
+            vertical: true;
+        }
+
+        Chip {
+            text: "Run history (" + TopBarState.history-count + ")";
+            selected: TopBarState.show-history;
+            clicked => {
+                TopBarState.toggle-history();
+            }
+            Tooltip {
+                text: @markdown("Show or hide the run history panel");
+            }
+        }
+        Separator {
+            vertical: true;
+        }
+        HorizontalLayout {
+            spacing: 2px;
+            horizontal-stretch: 0;
+            Chip {
+                text: "System";
+                selected: TopBarState.theme == 0;
+                clicked => {
+                    TopBarState.choose-theme(0);
+                }
+                Tooltip {
+                    text: @markdown("Follow the operating system's light or dark mode");
+                }
+            }
+            Chip {
+                text: "Dark";
+                selected: TopBarState.theme == 1;
+                clicked => {
+                    TopBarState.choose-theme(1);
+                }
+                Tooltip {
+                    text: @markdown("Use the dark theme");
+                }
+            }
+            Chip {
+                text: "Light";
+                selected: TopBarState.theme == 2;
+                clicked => {
+                    TopBarState.choose-theme(2);
+                }
+                Tooltip {
+                    text: @markdown("Use the light theme");
+                }
+            }
+        }
+        Separator {
+            vertical: true;
+        }
+        Chip {
+            text: "About";
+            clicked => {
+                about.show();
+            }
+            Tooltip {
+                text: @markdown("About this app and Slint, the toolkit it is built with");
+            }
+        }
+    }
+
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Palette.border;
+    }
+}
