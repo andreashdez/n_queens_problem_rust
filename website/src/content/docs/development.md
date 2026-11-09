@@ -31,6 +31,8 @@ cargo clippy --lib --bins --features gui --target wasm32-unknown-unknown -- \
   -D clippy::pedantic -D clippy::nursery -D warnings
 ```
 
+The Slint GUI that is replacing it has its own page: `trunk serve website/gui-slint/index.html`. Lint it with `--features gui-slint` in place of `--features gui`. It is not published on the site yet.
+
 ## Work on the docs
 
 The site uses Astro and Starlight. With Node.js 24 LTS (Astro needs 22.23.4 or newer), npm, Python 3.10+, and Rust installed, run from `website/`:
@@ -88,6 +90,8 @@ Each platform has a packaging script:
 
 Each script writes into `target/macos/`, `target/linux/`, or `target/windows/` and prints the path of the archive.
 
+The scripts package the egui GUI. Set `GUI=slint` to package the Slint GUI that is replacing it, for example `GUI=slint scripts/bundle-macos.sh`. On Linux, the Slint GUI also needs the fontconfig development package, such as `libfontconfig1-dev`, to build. Its window uses `io.github.andreashdez.n-queens-solver` as its Wayland app ID and X11 window class, so the desktop matches it to the menu entry and icon.
+
 To publish a release, set `version` in `Cargo.toml`, then push a matching tag:
 
 ```bash
@@ -95,7 +99,7 @@ git tag -a v0.1.0 -m "v0.1.0"
 git push origin v0.1.0
 ```
 
-The Release workflow checks that the tag matches the crate version and creates the GitHub release for that tag if it does not exist yet. It then packages each platform on its own runner and attaches the archives. The Linux job runs on the oldest available Ubuntu runner, because the binaries need its glibc or newer. If one platform fails, the others still finish, and you can rerun only the failed job. Running the workflow manually builds the same archives as workflow artifacts without publishing anything.
+The Release workflow checks that the tag matches the crate version and creates the GitHub release for that tag if it does not exist yet. It then packages each platform on its own runner and attaches the archives. The Linux job runs on the oldest available Ubuntu runner, because the binaries need its glibc or newer. If one platform fails, the others still finish, and you can rerun only the failed job. Running the workflow manually builds the same archives as workflow artifacts without publishing anything. A manual run can package the Slint GUI by choosing `slint` for its **gui** input.
 
 None of the apps are signed with a paid certificate, so each system warns on the first launch of a downloaded copy:
 

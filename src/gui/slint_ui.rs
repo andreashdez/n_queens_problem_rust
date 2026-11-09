@@ -59,9 +59,30 @@ const MIN_POLL_INTERVAL: Duration = Duration::from_millis(16);
 /// Returns a Slint error if the window or its renderer cannot start.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run() -> Result<(), slint::PlatformError> {
+    #[cfg(target_os = "linux")]
+    select_linux_backend()?;
     // The app must outlive the event loop.
     let (ui, _app) = start(Storage::platform_default())?;
     ui.run()
+}
+
+/// The app ID Linux desktops use to match the window to its menu entry and
+/// icon: the name of the `.desktop` file that `scripts/package-linux.sh` writes.
+#[cfg(target_os = "linux")]
+pub const LINUX_APP_ID: &str = "io.github.andreashdez.n-queens-solver";
+
+/// Selects winit with the app ID set as the Wayland app ID and the X11 window class.
+#[cfg(target_os = "linux")]
+fn select_linux_backend() -> Result<(), slint::PlatformError> {
+    use slint::winit_030::winit::platform::x11::WindowAttributesExtX11 as _;
+
+    slint::BackendSelector::new()
+        .backend_name("winit".into())
+        // On Wayland, the same name becomes the app ID.
+        .with_winit_window_attributes_hook(|attributes| {
+            attributes.with_name(LINUX_APP_ID, LINUX_APP_ID)
+        })
+        .select()
 }
 
 /// Starts the solver interface in the page's `<canvas id="canvas">`.
