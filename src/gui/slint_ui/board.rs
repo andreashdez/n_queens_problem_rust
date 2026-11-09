@@ -557,6 +557,28 @@ mod tests {
     }
 
     #[test]
+    fn a_huge_board_at_full_zoom_lays_out_only_what_is_in_view() {
+        let positions: Vec<u16> = (0..u16::MAX).collect();
+        let conflicts = vec![u32::from(u16::MAX) - 1; positions.len()];
+        let mut view = BoardView::default();
+        view.set_zoom(crate::gui::board::MAX_ZOOM, Point::new(0.5, 0.5));
+        let scene = Scene {
+            positions: &positions,
+            conflicts: &conflicts,
+            selected: Some(32_000),
+            view,
+            palette: &Palette::DARK,
+        };
+        let viewport = viewport(Some(positions.len()), 800.0, 800.0);
+        let buffer = render(&scene, viewport.side, 2.0);
+        assert_eq!(buffer.width(), pixels((viewport.side * 2.0).round()));
+        let labels = queen_labels(&scene, viewport);
+        assert!(labels.len() < 100, "{} queen labels", labels.len());
+        let coordinates = coordinate_labels(&scene, viewport);
+        assert!(!coordinates.is_empty() && coordinates.len() < 100);
+    }
+
+    #[test]
     fn labels_follow_zoom_and_the_selection() {
         let positions: Vec<u16> = (0..18).collect();
         let conflicts = vec![17; 18];

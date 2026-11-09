@@ -26,6 +26,9 @@ export component AppWindow inherits Window {
     // From the background rather than `Palette.color-scheme`, which stays unknown
     // while the style follows the system.
     out property <bool> dark: Palette.background.to-hsv().value < 0.5;
+    // For tests that check text in the palette colors is readable on the panels.
+    out property <color> panel-background: Palette.background;
+    out property <color> bar-background: Palette.alternate-background;
     callback theme-changed();
     changed dark => {
         root.theme-changed();
@@ -61,8 +64,11 @@ export component AppWindow inherits Window {
         VerticalLayout {
             TopBar { }
             HorizontalLayout {
+                // Side panels give up width before the board and charts get too narrow.
                 Controls {
-                    width: 330px;
+                    min-width: 270px;
+                    preferred-width: 330px;
+                    horizontal-stretch: 0;
                 }
                 VerticalLayout {
                     horizontal-stretch: 1;
@@ -86,11 +92,15 @@ export component AppWindow inherits Window {
                         }
                     }
                     Charts {
-                        height: root.chart-height;
+                        min-height: 240px;
+                        preferred-height: root.chart-height;
+                        vertical-stretch: 0;
                     }
                 }
                 if TopBarState.show-history: History {
-                    width: 320px;
+                    min-width: 250px;
+                    preferred-width: 320px;
+                    horizontal-stretch: 0;
                 }
             }
         }
