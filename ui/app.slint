@@ -1,0 +1,98 @@
+// The N-Queens solver window: the top bar, run settings on the left, the board
+// in the middle above the charts, and run history on the right.
+
+import { Palette } from "std-widgets.slint";
+import { AppColors } from "theme.slint";
+import { TopBar, TopBarState } from "top-bar.slint";
+import { Controls, ControlsState, MetricRow } from "controls.slint";
+import { Board, BoardState, BoardText } from "board.slint";
+import { Charts, ChartsState, ChartData, LegendEntry, PlotLine, Tick } from "charts.slint";
+import { History, HistoryState, SavedRunItem } from "history.slint";
+
+export { AppColors, TopBarState, ControlsState, MetricRow, BoardState, BoardText, ChartsState, ChartData, LegendEntry, PlotLine, Tick, HistoryState, SavedRunItem }
+
+export component AppWindow inherits Window {
+    title: "N-Queens Solver";
+    icon: @image-url("../assets/app-icon.png");
+    preferred-width: 1400px;
+    preferred-height: 900px;
+    min-width: 1000px;
+    min-height: 680px;
+    background: Palette.background;
+    forward-focus: keys;
+
+    // Room for the chart tabs and two charts at a readable height.
+    in-out property <length> chart-height: 400px;
+    // From the background rather than `Palette.color-scheme`, which stays unknown
+    // while the style follows the system.
+    out property <bool> dark: Palette.background.to-hsv().value < 0.5;
+    callback theme-changed();
+    changed dark => {
+        root.theme-changed();
+    }
+
+    // 0: follow the system, 1: dark, 2: light.
+    public function use-theme(theme: int) {
+        Palette.color-scheme = theme == 1 ? ColorScheme.dark : theme == 2 ? ColorScheme.light : ColorScheme.unknown;
+        root.theme-changed();
+    }
+
+    keys := FocusScope {
+        KeyBinding {
+            keys: @keys(Control + Return);
+            enabled: !TopBarState.running;
+            activated => {
+                TopBarState.run();
+            }
+        }
+        // Escape clears a selected queen first, and otherwise cancels a run.
+        KeyBinding {
+            keys: @keys(Escape);
+            enabled: BoardState.has-selection || TopBarState.running;
+            activated => {
+                if (BoardState.has-selection) {
+                    BoardState.clear-selection();
+                } else {
+                    TopBarState.cancel();
+                }
+            }
+        }
+
+        VerticalLayout {
+            TopBar { }
+            HorizontalLayout {
+                Controls {
+                    width: 330px;
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    Board {
+                        vertical-stretch: 1;
+                    }
+                    // Drag to resize the chart panel.
+                    Rectangle {
+                        height: 5px;
+                        background: splitter.has-hover || splitter.pressed ? Palette.border : transparent;
+                        Rectangle {
+                            y: 2px;
+                            height: 1px;
+                            background: Palette.border;
+                        }
+                        splitter := TouchArea {
+                            mouse-cursor: row-resize;
+                            moved => {
+                                root.chart-height = clamp(root.chart-height - (self.mouse-y - self.pressed-y), 300px, max(300px, min(900px, root.height - 300px)));
+                            }
+                        }
+                    }
+                    Charts {
+                        height: root.chart-height;
+                    }
+                }
+                if TopBarState.show-history: History {
+                    width: 320px;
+                }
+            }
+        }
+    }
+}

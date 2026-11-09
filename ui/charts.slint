@@ -1,0 +1,324 @@
+// The bottom panel: a run's metric charts, or the convergence of two saved runs.
+
+import { CheckBox, Palette } from "std-widgets.slint";
+import { Chip, Label, Separator, Strong, Weak } from "theme.slint";
+
+export struct Tick {
+    pos: length,
+    text: string,
+}
+
+export struct PlotLine {
+    color: color,
+    // SVG path commands in plot pixels.
+    commands: string,
+}
+
+export struct LegendEntry {
+    label: string,
+    color: color,
+    hidden: bool,
+    // Restart markers are dashed.
+    dashed: bool,
+}
+
+export struct ChartData {
+    title: string,
+    x-label: string,
+    legend: [LegendEntry],
+    lines: [PlotLine],
+    x-ticks: [Tick],
+    y-ticks: [Tick],
+    // Negative when the pointer is not over a chart.
+    hover-x: length,
+    hover-text: string,
+}
+
+export global ChartsState {
+    // 0: run metrics, 1: A/B comparison.
+    in property <int> view;
+    in-out property <bool> log-scale: true;
+    // Shown instead of charts when there are none yet.
+    in property <string> message;
+    in property <string> note;
+    in property <string> caption;
+    in property <[ChartData]> charts;
+
+    callback show-view(int);
+    callback log-scale-toggled();
+    callback plot-resized(length, length);
+    // Positions are fractions of the plot width.
+    callback pan(float);
+    callback zoom(float, float);
+    callback hover(float);
+    callback reset();
+    callback toggle(int, string);
+}
+
+// Wide enough for "100%" so stacked charts line up.
+global ChartMetrics {
+    out property <length> y-axis-width: 44px;
+}
+
+component Chart inherits VerticalLayout {
+    in property <ChartData> data;
+    in property <int> index;
+
+    spacing: 2px;
+    HorizontalLayout {
+        spacing: 12px;
+        Strong {
+            text: root.data.title;
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+        for entry in root.data.legend: HorizontalLayout {
+            spacing: 4px;
+            horizontal-stretch: 0;
+            Rectangle {
+                width: 16px;
+                Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    height: 2px;
+                    width: entry.dashed ? 6px : 16px;
+                    x: 0;
+                    background: entry.hidden ? Palette.foreground.transparentize(0.75) : entry.color;
+                }
+                if entry.dashed: Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    height: 2px;
+                    width: 6px;
+                    x: 10px;
+                    background: entry.hidden ? Palette.foreground.transparentize(0.75) : entry.color;
+                }
+            }
+            Text {
+                text: entry.label;
+                font-size: 12px;
+                vertical-alignment: center;
+                color: entry.hidden ? Palette.foreground.transparentize(0.6) : Palette.foreground;
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        ChartsState.toggle(root.index, entry.label);
+                    }
+                }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 4px;
+        vertical-stretch: 1;
+        // Y-axis labels.
+        Rectangle {
+            width: ChartMetrics.y-axis-width;
+            for tick in root.data.y-ticks: Text {
+                x: 0;
+                y: tick.pos - 7px;
+                width: parent.width;
+                height: 14px;
+                text: tick.text;
+                font-size: 11px;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                color: Palette.foreground.transparentize(0.3);
+            }
+        }
+
+        VerticalLayout {
+            plot := Rectangle {
+                min-height: 60px;
+                clip: true;
+                border-width: 1px;
+                border-color: Palette.border;
+                changed width => {
+                    ChartsState.plot-resized(self.width, self.height);
+                }
+                changed height => {
+                    ChartsState.plot-resized(self.width, self.height);
+                }
+                init => {
+                    ChartsState.plot-resized(self.width, self.height);
+                }
+
+                for tick in root.data.y-ticks: Rectangle {
+                    x: 0;
+                    y: tick.pos;
+                    width: parent.width;
+                    height: 1px;
+                    background: Palette.border.transparentize(0.5);
+                }
+                for tick in root.data.x-ticks: Rectangle {
+                    x: tick.pos;
+                    y: 0;
+                    width: 1px;
+                    height: parent.height;
+                    background: Palette.border.transparentize(0.5);
+                }
+                for line in root.data.lines: Path {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    viewbox-x: 0;
+                    viewbox-y: 0;
+                    viewbox-width: self.width / 1px;
+                    viewbox-height: self.height / 1px;
+                    commands: line.commands;
+                    stroke: line.color;
+                    stroke-width: 2px;
+                }
+
+                if root.data.hover-x >= 0: Rectangle {
+                    x: root.data.hover-x;
+                    width: 1px;
+                    background: Palette.foreground.transparentize(0.5);
+                }
+                if root.data.hover-x >= 0 && root.data.hover-text != "": Rectangle {
+                    x: root.data.hover-x + 12px + self.width < parent.width ? root.data.hover-x + 12px : max(0, root.data.hover-x - 12px - self.width);
+                    y: 6px;
+                    width: hover-label.preferred-width + 16px;
+                    height: hover-label.preferred-height + 10px;
+                    background: Palette.alternate-background;
+                    border-color: Palette.border;
+                    border-width: 1px;
+                    border-radius: 4px;
+                    hover-label := Text {
+                        text: root.data.hover-text;
+                        font-size: 12px;
+                        color: Palette.foreground;
+                    }
+                }
+
+                TouchArea {
+                    property <length> last-x;
+                    mouse-cursor: self.pressed ? MouseCursor.grabbing : MouseCursor.crosshair;
+                    pointer-event(event) => {
+                        if (event.kind == PointerEventKind.down) {
+                            self.last-x = self.mouse-x;
+                        }
+                    }
+                    moved => {
+                        ChartsState.pan((self.mouse-x - self.last-x) / plot.width);
+                        self.last-x = self.mouse-x;
+                    }
+                    changed mouse-x => {
+                        ChartsState.hover(self.mouse-x / plot.width);
+                    }
+                    changed has-hover => {
+                        if (!self.has-hover) {
+                            ChartsState.hover(-1);
+                        }
+                    }
+                    double-clicked => {
+                        ChartsState.reset();
+                    }
+                    scroll-event(event) => {
+                        // Leave plain scrolling to the page; zoom with Ctrl/Cmd + scroll.
+                        if (event.modifiers.control || event.modifiers.meta) {
+                            ChartsState.zoom(pow(1.002, event.delta-y / 1px), self.mouse-x / plot.width);
+                            return accept;
+                        }
+                        if (event.delta-x != 0) {
+                            ChartsState.pan(event.delta-x / plot.width);
+                            return accept;
+                        }
+                        reject
+                    }
+                }
+            }
+
+            // X-axis labels and name.
+            Rectangle {
+                height: 14px;
+                for tick in root.data.x-ticks: Text {
+                    x: tick.pos - 40px;
+                    width: 80px;
+                    text: tick.text;
+                    font-size: 11px;
+                    horizontal-alignment: center;
+                    color: Palette.foreground.transparentize(0.3);
+                }
+            }
+            Text {
+                text: root.data.x-label;
+                font-size: 11px;
+                horizontal-alignment: center;
+                color: Palette.foreground.transparentize(0.3);
+            }
+        }
+    }
+}
+
+export component Charts inherits VerticalLayout {
+    padding: 8px;
+    spacing: 4px;
+
+    HorizontalLayout {
+        spacing: 6px;
+        alignment: start;
+        Chip {
+            text: "Run metrics";
+            selected: ChartsState.view == 0;
+            clicked => {
+                ChartsState.show-view(0);
+            }
+            Tooltip {
+                text: @markdown("Attacking pairs and other metrics of the run on the board");
+            }
+        }
+        Chip {
+            text: "Compare A/B";
+            selected: ChartsState.view == 1;
+            clicked => {
+                ChartsState.show-view(1);
+            }
+            Tooltip {
+                text: @markdown("Best-board attacking pairs of the two runs marked A and B in run history");
+            }
+        }
+        Separator {
+            vertical: true;
+        }
+        CheckBox {
+            text: "Log scale";
+            checked <=> ChartsState.log-scale;
+            toggled => {
+                ChartsState.log-scale-toggled();
+            }
+            Tooltip {
+                text: @markdown("Plot attacking pairs on a log scale so small best-board counts stay visible next to larger counts.");
+            }
+        }
+        Separator {
+            vertical: true;
+        }
+        Weak {
+            text: "Chart tips";
+            Tooltip {
+                text: @markdown("Drag to pan · Ctrl/Cmd + scroll to zoom · double-click to reset · click legend entries to hide them");
+            }
+        }
+    }
+
+    if ChartsState.message != "": Label {
+        text: ChartsState.message;
+        vertical-alignment: top;
+        vertical-stretch: 1;
+    }
+    if ChartsState.note != "": Label {
+        text: ChartsState.note;
+        wrap: word-wrap;
+    }
+    if ChartsState.caption != "": Weak {
+        text: ChartsState.caption;
+        wrap: word-wrap;
+    }
+    for chart[index] in ChartsState.charts: Chart {
+        data: chart;
+        index: index;
+        vertical-stretch: 1;
+    }
+}

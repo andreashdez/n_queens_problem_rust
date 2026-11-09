@@ -1,0 +1,126 @@
+// Colors the GUI paints itself, set from `src/gui/palette.rs` for the active theme.
+// Widgets take theirs from the Fluent style's `Palette`.
+
+import { Palette } from "std-widgets.slint";
+
+export global AppColors {
+    in property <color> success;
+    in property <color> warning;
+    in property <color> error-text;
+    in property <color> accent;
+    in property <color> empty-board;
+    in property <color> empty-board-text;
+    in property <color> selected-queen;
+    in property <color> coordinate;
+    in property <color> queen-label;
+}
+
+// Text styles shared by the panels.
+export component Heading inherits Text {
+    font-size: 18px;
+    font-weight: 600;
+    color: Palette.foreground;
+}
+
+export component Strong inherits Text {
+    font-weight: 600;
+    color: Palette.foreground;
+}
+
+export component Label inherits Text {
+    color: Palette.foreground;
+    vertical-alignment: center;
+}
+
+// Secondary text, like egui's weak labels.
+export component Weak inherits Text {
+    color: Palette.foreground.transparentize(0.35);
+    vertical-alignment: center;
+}
+
+export component Separator inherits Rectangle {
+    in property <bool> vertical;
+    width: root.vertical ? 1px : self.preferred-width;
+    height: root.vertical ? self.preferred-height : 1px;
+    background: Palette.border;
+}
+
+// A selectable label: one choice among several, or a toggle.
+export component Chip inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    min-width: label.preferred-width + 16px;
+    min-height: 26px;
+    horizontal-stretch: 0;
+    border-radius: 4px;
+    background: root.selected ? Palette.selection-background.transparentize(0.25) : touch.has-hover && root.enabled ? Palette.foreground.transparentize(0.92) : transparent;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    label := Text {
+        text: root.text;
+        color: root.selected ? Palette.selection-foreground : root.enabled ? Palette.foreground : Palette.foreground.transparentize(0.6);
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A header that shows or hides the section under it. The arrow is a path
+// because the web build's font has no arrow glyphs.
+export component Disclosure inherits Rectangle {
+    in property <string> text;
+    in-out property <bool> open;
+
+    min-width: label.preferred-width + 30px;
+    min-height: 26px;
+    horizontal-stretch: 0;
+    border-radius: 4px;
+    background: touch.has-hover ? Palette.foreground.transparentize(0.92) : transparent;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-expandable: true;
+    accessible-expanded: root.open;
+    accessible-action-default => {
+        root.open = !root.open;
+    }
+
+    Path {
+        x: 8px;
+        y: (parent.height - self.height) / 2;
+        width: 8px;
+        height: 8px;
+        viewbox-width: 8;
+        viewbox-height: 8;
+        commands: root.open ? "M0 2 L8 2 L4 7 Z" : "M2 0 L7 4 L2 8 Z";
+        fill: Palette.foreground;
+    }
+    label := Text {
+        x: 22px;
+        text: root.text;
+        color: Palette.foreground;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.open = !root.open;
+        }
+    }
+}

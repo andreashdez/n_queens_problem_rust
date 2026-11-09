@@ -35,6 +35,8 @@ Keep **Recommended defaults · 18×18** and seed **42**, then click **Run solver
 
 To try the GUI without building it, [open it in your browser](https://andreashdez.github.io/n_queens_problem_rust/demo/). It is the same app compiled to WebAssembly, and slower than the desktop app on large boards.
 
+The GUI is being rewritten with [Slint](https://slint.dev). To try the new version, run `cargo run --release --locked --features gui-slint --bin n_queens_slint`, or `trunk serve website/gui-slint/index.html` for the browser. On Linux it needs the fontconfig development package, such as `libfontconfig1-dev`.
+
 ### Command line
 
 ```bash

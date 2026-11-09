@@ -29,6 +29,8 @@ jobs:
       run: |
         rustup component add rustfmt clippy
         rustup target add wasm32-unknown-unknown
+    - name: Install fontconfig for the Slint GUI
+      run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
     - name: Cache Rust dependencies and build output
       uses: Swatinem/rust-cache@v2
       with:
@@ -39,6 +41,8 @@ jobs:
       run: cargo clippy --all-targets --all-features -- -D clippy::pedantic -D clippy::nursery -D warnings
     - name: Run clippy for the web GUI
       run: cargo clippy --lib --bins --features gui --target wasm32-unknown-unknown -- -D clippy::pedantic -D clippy::nursery -D warnings
+    - name: Run clippy for the Slint web GUI
+      run: cargo clippy --lib --bins --features gui-slint --target wasm32-unknown-unknown -- -D clippy::pedantic -D clippy::nursery -D warnings
     - name: Build
       run: cargo build --verbose
     - name: Run default-feature tests
