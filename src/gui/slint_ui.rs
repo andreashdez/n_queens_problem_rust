@@ -176,8 +176,11 @@ struct App {
     presets_custom: Option<bool>,
     /// What run history last showed, so its list is rebuilt only when it changes.
     history_key: Option<HistoryKey>,
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(test), not(target_arch = "wasm32")))]
     clipboard: Option<arboard::Clipboard>,
+    /// What tests copied, in place of the system clipboard.
+    #[cfg(test)]
+    copied: Vec<String>,
 }
 
 type HistoryKey = (Vec<u64>, Option<u64>, [Option<u64>; 2], bool);
@@ -211,8 +214,10 @@ impl App {
             chart_model: Rc::new(VecModel::default()),
             presets_custom: None,
             history_key: None,
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(not(test), not(target_arch = "wasm32")))]
             clipboard: None,
+            #[cfg(test)]
+            copied: Vec::new(),
         }
     }
 
@@ -287,7 +292,7 @@ impl App {
     }
 
     /// Copies `text` to the clipboard. Errors are returned as a notice.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(test), not(target_arch = "wasm32")))]
     fn copy(&mut self, text: &str) -> Result<(), String> {
         // The clipboard stays open: on X11 the copied text lives only as long as it does.
         if self.clipboard.is_none() {
@@ -300,8 +305,19 @@ impl App {
             .map_err(|error| error.to_string())
     }
 
+    /// Tests keep what they copy instead of replacing the system clipboard.
+    #[cfg(test)]
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "Matches the real copy, which can fail."
+    )]
+    fn copy(&mut self, text: &str) -> Result<(), String> {
+        self.copied.push(text.to_owned());
+        Ok(())
+    }
+
     /// Copies `text` to the clipboard. Errors are returned as a notice.
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(not(test), target_arch = "wasm32"))]
     #[allow(
         clippy::unused_self,
         clippy::needless_pass_by_ref_mut,

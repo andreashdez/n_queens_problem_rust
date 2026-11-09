@@ -87,6 +87,9 @@ export component Board inherits VerticalLayout {
         }
         if BoardState.has-board: Label {
             text: BoardState.summary;
+            min-width: 0;
+            horizontal-stretch: 1;
+            overflow: elide;
         }
         if BoardState.has-board: Button {
             text: "−";

@@ -100,8 +100,8 @@ impl Palette {
     /// Darker, more saturated tones: at least 4.5:1 as text on light panels,
     /// and white queen labels stay readable on every queen fill.
     pub(super) const LIGHT: Self = Self {
-        success: Rgba::rgb(22, 128, 62),
-        warning: Rgba::rgb(166, 96, 0),
+        success: Rgba::rgb(19, 118, 56),
+        warning: Rgba::rgb(150, 86, 0),
         danger: Rgba::rgb(200, 40, 55),
         error_text: Rgba::rgb(190, 30, 40),
         accent: Rgba::rgb(160, 205, 240),

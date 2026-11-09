@@ -102,6 +102,12 @@ impl ChartView {
         self.range = Some(self.clamp((start, start + span)));
     }
 
+    /// Whether the x range is zoomed or panned away from the whole run.
+    #[cfg(test)]
+    pub(super) const fn zoomed(&self) -> bool {
+        self.range.is_some()
+    }
+
     pub(super) const fn reset(&mut self) {
         self.range = None;
     }

@@ -64,26 +64,22 @@ export component TopBar inherits Rectangle {
         spacing: 8px;
         alignment: stretch;
 
-        if !TopBarState.running: Button {
+        // One button that runs or cancels. Swapping two buttons would orphan the
+        // first one's tooltip under the pointer.
+        Button {
             min-width: 120px;
-            text: "Run solver";
-            primary: true;
-            clicked => {
-                TopBarState.run();
-            }
-            Tooltip {
-                text: @markdown("Start a run with the settings on the left (Ctrl/Cmd+Enter)");
-            }
-        }
-        if TopBarState.running: Button {
-            min-width: 120px;
-            text: TopBarState.cancel-requested ? "Cancelling…" : "Cancel run";
+            text: !TopBarState.running ? "Run solver" : TopBarState.cancel-requested ? "Cancelling…" : "Cancel run";
+            primary: !TopBarState.running;
             enabled: !TopBarState.cancel-requested;
             clicked => {
-                TopBarState.cancel();
+                if (TopBarState.running) {
+                    TopBarState.cancel();
+                } else {
+                    TopBarState.run();
+                }
             }
             Tooltip {
-                text: @markdown("\{"Stop after the current " + TopBarState.step-name + " (Esc)"}");
+                text: @markdown("\{TopBarState.running ? "Stop after the current " + TopBarState.step-name + " (Esc)" : "Start a run with the settings on the left (Ctrl/Cmd+Enter)"}");
             }
         }
         if TopBarState.running: Rectangle {
