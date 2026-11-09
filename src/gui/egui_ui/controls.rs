@@ -1,15 +1,20 @@
 //! The left panel: run settings and the metrics of the run on the board.
 
 use eframe::egui::{self, RichText};
-use rand::RngExt;
 
-use super::{NQueensApp, config::GuiPreset, format_ms, palette::Palette, worker::Progress};
-use crate::{Solver, ga::SelectionStrategy};
+use super::palette;
+use crate::{
+    Solver,
+    ga::SelectionStrategy,
+    gui::{
+        config::GuiPreset,
+        state::{AppState, INVALID_SEED_HELP, SEED_HELP},
+    },
+};
 
-/// Fits the 20 digits of the largest `u64`.
 const SEED_FIELD_WIDTH: f32 = 160.0;
 
-impl NQueensApp {
+impl AppState {
     pub(super) fn draw_controls(&mut self, ui: &mut egui::Ui) {
         let is_running = self.running.is_some();
         ui.heading("Set up a run");
@@ -26,7 +31,7 @@ impl NQueensApp {
                             .selectable_label(preset == Some(choice), choice.label())
                             .clicked()
                         {
-                            self.config = choice.config(self.config.seed);
+                            self.choose_preset(choice);
                         }
                     }
                 });
@@ -59,23 +64,14 @@ impl NQueensApp {
                             .on_hover_text("Choose a new seed")
                             .clicked()
                         {
-                            self.config.seed = rand::rng().random::<u64>();
-                            self.seed_text = self.config.seed.to_string();
+                            self.randomize_seed();
                         }
                     });
                     ui.end_row();
                 });
         });
         ui.add_space(8.0);
-        ui.weak(match self.config.solver {
-            Solver::Ga => format!(
-                "{} individuals · up to {} epochs",
-                self.config.population_size, self.config.max_epochs
-            ),
-            Solver::MinConflicts => {
-                format!("One board · up to {} repair passes", self.config.max_epochs)
-            }
-        });
+        ui.weak(self.budget_summary());
         ui.add_space(10.0);
         egui::CollapsingHeader::new("Advanced settings")
             .default_open(false)
@@ -91,30 +87,22 @@ impl NQueensApp {
     fn draw_seed_field(&mut self, ui: &mut egui::Ui) {
         let focus_id = ui.next_auto_id();
         // Follow seeds set elsewhere (presets, reruns, saved settings) unless mid-edit.
-        if !ui.memory(|memory| memory.has_focus(focus_id))
-            && self.seed_text.parse() != Ok(self.config.seed)
-        {
-            self.seed_text = self.config.seed.to_string();
+        if !ui.memory(|memory| memory.has_focus(focus_id)) {
+            self.sync_seed_text();
         }
-        let valid = self.seed_text.parse::<u64>().is_ok();
+        let valid = self.seed_text_is_valid();
         let mut field = egui::TextEdit::singleline(&mut self.seed_text)
             .id(focus_id)
             .font(egui::TextStyle::Monospace)
             .desired_width(SEED_FIELD_WIDTH);
         if !valid {
-            field = field.text_color(Palette::of(ui.ctx()).error_text);
+            field = field.text_color(palette(ui.ctx()).error_text.into());
         }
-        let response = ui.add(field).on_hover_text(if valid {
-            "Use the same seed and settings to reproduce a run."
-        } else {
-            "Enter a whole number from 0 to 18446744073709551615. Leaving the field keeps the last valid seed."
-        });
+        let response =
+            ui.add(field)
+                .on_hover_text(if valid { SEED_HELP } else { INVALID_SEED_HELP });
         if response.changed() {
-            self.seed_text
-                .retain(|character| character.is_ascii_digit());
-            if let Ok(seed) = self.seed_text.parse() {
-                self.config.seed = seed;
-            }
+            self.seed_text_edited();
         }
     }
 
@@ -239,98 +227,27 @@ impl NQueensApp {
     }
 
     fn draw_current_metrics(&self, ui: &mut egui::Ui) {
-        ui.label(
-            RichText::new(if self.archive.viewed.is_some() {
-                "Viewed run"
-            } else {
-                "Current run"
-            })
-            .strong(),
-        );
-
-        let Some((progress, best_conflicts_sum)) = self.current_metrics() else {
+        let panel = self.metrics_panel();
+        ui.label(RichText::new(panel.title).strong());
+        let Some(rows) = panel.rows else {
             ui.label("No metrics yet.");
             return;
         };
-
         egui::Grid::new("metrics_grid")
             .num_columns(2)
             .spacing([12.0, 5.0])
-            .show(ui, |ui| match progress {
-                Progress::Ga(metrics) => {
-                    metric_row(ui, "Epoch", metrics.epoch().to_string());
-                    metric_row(ui, "Best attacking pairs", best_conflicts_sum.to_string());
-                    metric_row(
-                        ui,
-                        "Avg attacking pairs",
-                        format!("{:.2}", metrics.average_conflicts_sum()),
-                    );
-                    metric_row(
-                        ui,
-                        "Diversity",
-                        format!("{:.1}%", metrics.diversity_ratio() * 100.0),
-                    );
-                    metric_row(ui, "Mutation", format_ratio(metrics.mutation_rate()));
-                    metric_row(ui, "Elite", format_ratio(metrics.elite_ratio()));
-                    metric_row(ui, "Population", metrics.population_size().to_string());
-                    metric_row(ui, "Elapsed", format_ms(metrics.elapsed_ms()));
-                }
-                Progress::MinConflicts(metrics) => {
-                    metric_row(ui, "Pass", metrics.pass().to_string());
-                    metric_row(ui, "Best attacking pairs", best_conflicts_sum.to_string());
-                    metric_row(
-                        ui,
-                        "Current board",
-                        metrics.current_conflicts_sum().to_string(),
-                    );
-                    metric_row(ui, "Swaps", metrics.swaps().to_string());
-                    metric_row(ui, "Restarts", metrics.restarts().to_string());
-                    metric_row(ui, "Elapsed", format_ms(metrics.elapsed_ms()));
+            .show(ui, |ui| {
+                for (label, value) in rows {
+                    ui.label(label);
+                    ui.label(RichText::new(value).monospace());
+                    ui.end_row();
                 }
             });
-
-        if let Some(result) = self.display_result() {
+        if !panel.footer.is_empty() {
             ui.add_space(6.0);
-            if let Some(population_size) = result.population_size {
-                ui.label(format!("Final population: {population_size}"));
+            for line in panel.footer {
+                ui.label(line);
             }
-            ui.label(format!(
-                "Total elapsed: {}",
-                format_ms(result.total_elapsed_ms)
-            ));
         }
-    }
-}
-
-fn metric_row(ui: &mut egui::Ui, label: &str, value: String) {
-    ui.label(label);
-    ui.label(RichText::new(value).monospace());
-    ui.end_row();
-}
-
-fn format_ratio(value: f32) -> String {
-    format!("{:.1}%", value * 100.0)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn draw(app: &mut NQueensApp) {
-        let ctx = egui::Context::default();
-        ctx.run_ui(egui::RawInput::default(), |ui| app.draw_controls(ui))
-            .drop_without_applying_deltas();
-    }
-
-    #[test]
-    fn seed_field_follows_seeds_set_elsewhere() {
-        let mut app = NQueensApp::default();
-        app.config.seed = u64::MAX;
-        draw(&mut app);
-        assert_eq!(app.seed_text, u64::MAX.to_string());
-        // An abandoned invalid edit falls back to the last valid seed.
-        app.seed_text = "18446744073709551616".into();
-        draw(&mut app);
-        assert_eq!(app.seed_text, u64::MAX.to_string());
     }
 }

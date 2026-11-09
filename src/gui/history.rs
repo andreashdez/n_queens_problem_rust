@@ -1,21 +1,21 @@
+//! The runs kept for this session, what they say about themselves, and their CSV export.
+
 use std::{collections::VecDeque, fmt::Write as _, sync::Arc};
 #[cfg(not(target_arch = "wasm32"))]
 use std::{fs, io, path::Path};
 
-use eframe::egui;
-
 use super::{
-    BoardView, ChartView, NQueensApp, Step, attacking_pairs,
-    charts::{Chart, ChartMarker, ChartScale, ChartSeries, plot_height, plot_value},
+    attacking_pairs,
     config::GuiConfig,
-    format_ms,
-    palette::Palette,
-    solver_name,
+    format_ms, solver_name,
     worker::{Progress, RunResult},
 };
 use crate::Solver;
 
 const MAX_SAVED_RUNS: usize = 10;
+
+pub(super) const HISTORY_CAPTION: &str = "Last 10 completed runs · this session only";
+pub(super) const EMPTY_HISTORY_TEXT: &str = "Completed and cancelled runs appear here.";
 
 /// For min-conflicts runs, `epoch` holds the pass and the GA-only columns are empty.
 const CSV_HEADER: &str = "record_type,run_id,solver,seed,board_size,target_population,max_epochs,mutation_rate,elite_ratio,offspring_ratio,min_diversity_ratio,selection_strategy,tournament_size,local_search_rate,local_search_attempts,allow_unsolvable,stop_reason,solved_epoch,run_elapsed_ms,retained_samples,downsampled,epoch,best_conflicts_sum,average_conflicts_sum,population_size,elapsed_ms,unique_chromosomes,diversity_ratio,epoch_mutation_rate,epoch_elite_ratio,offspring_count,local_search_improvements,stagnation_epochs,diversity_replacements,restart_count,last_restart_epoch,current_conflicts_sum,swaps";
@@ -61,11 +61,28 @@ impl RunArchive {
         self.runs.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.runs.is_empty()
+    }
+
     pub fn get(&self, id: u64) -> Option<&SavedRun> {
         self.runs.iter().find(|run| run.id == id)
     }
 
-    fn toggle_comparison(&mut self, slot: usize, id: u64) {
+    /// Newest first, as run history lists them.
+    pub fn newest_first(&self) -> impl Iterator<Item = &SavedRun> {
+        self.runs.iter().rev()
+    }
+
+    /// The run marked A and the run marked B, once both are.
+    pub fn comparison_pair(&self) -> Option<[&SavedRun; 2]> {
+        let [Some(a), Some(b)] = self.compare.map(|id| id.and_then(|id| self.get(id))) else {
+            return None;
+        };
+        Some([a, b])
+    }
+
+    pub(super) fn toggle_comparison(&mut self, slot: usize, id: u64) {
         if self.get(id).is_none() {
             return;
         }
@@ -80,7 +97,7 @@ impl RunArchive {
     }
 }
 
-fn comparison_context(a: &GuiConfig, b: &GuiConfig) -> String {
+pub(super) fn comparison_context(a: &GuiConfig, b: &GuiConfig) -> String {
     let seed = if a.seed == b.seed {
         format!("Same seed ({})", a.seed)
     } else {
@@ -105,37 +122,60 @@ fn comparison_context(a: &GuiConfig, b: &GuiConfig) -> String {
     context
 }
 
-/// A saved run's settings, as the solver uses them.
-fn draw_settings(ui: &mut egui::Ui, config: &GuiConfig) {
+/// A saved run's settings, as the solver uses them, one line per group.
+pub(super) fn settings_lines(config: &GuiConfig) -> Vec<String> {
     if config.solver == Solver::MinConflicts {
-        ui.label(format!(
+        return vec![format!(
             "Min-conflicts · passes {} · unsolvable experiments {}",
             config.max_epochs, config.allow_unsolvable
-        ));
-        return;
+        )];
     }
-    ui.label(format!(
-        "Population {} · epochs {} · {} selection (tournament size {})",
-        config.population_size,
-        config.max_epochs,
-        config.selection_strategy,
-        config.tournament_size
-    ));
-    ui.label(format!(
-        "Mutation {} · elite {} · offspring {} · diversity {}",
-        config.mutation_rate,
-        config.elite_ratio,
-        config.offspring_ratio,
-        config.min_diversity_ratio
-    ));
-    ui.label(format!(
-        "Local search {} · attempts {} · unsolvable experiments {}",
-        config.local_search_rate, config.local_search_attempts, config.allow_unsolvable
-    ));
+    vec![
+        format!(
+            "Population {} · epochs {} · {} selection (tournament size {})",
+            config.population_size,
+            config.max_epochs,
+            config.selection_strategy,
+            config.tournament_size
+        ),
+        format!(
+            "Mutation {} · elite {} · offspring {} · diversity {}",
+            config.mutation_rate,
+            config.elite_ratio,
+            config.offspring_ratio,
+            config.min_diversity_ratio
+        ),
+        format!(
+            "Local search {} · attempts {} · unsolvable experiments {}",
+            config.local_search_rate, config.local_search_attempts, config.allow_unsolvable
+        ),
+    ]
 }
 
 impl SavedRun {
-    fn csv(&self) -> String {
+    pub(super) fn title(&self) -> String {
+        format!("Run #{}", self.id)
+    }
+
+    /// The one-line summary under the run's title.
+    pub(super) fn summary(&self) -> String {
+        let result = &self.result;
+        format!(
+            "{} · {}×{} · seed {} · {} · {}",
+            solver_name(result.config.solver),
+            result.config.board_size,
+            result.config.board_size,
+            result.config.seed,
+            attacking_pairs(result.best_conflicts_sum),
+            format_ms(result.total_elapsed_ms)
+        )
+    }
+
+    pub(super) fn csv_file_name(&self) -> String {
+        format!("n-queens-run-{}.csv", self.id)
+    }
+
+    pub(super) fn csv(&self) -> String {
         let config = &self.result.config;
         let history = &self.result.history;
         let is_ga = config.solver == Solver::Ga;
@@ -221,203 +261,41 @@ impl SavedRun {
         // The native save dialog has already confirmed replacing an existing file.
         fs::write(path, self.csv())
     }
-}
 
-impl NQueensApp {
     /// Asks for a destination with the native save dialog, then writes the CSV.
+    /// Returns the notice to show and whether it reports an error, or `None` if
+    /// the dialog was dismissed.
     #[cfg(not(target_arch = "wasm32"))]
-    fn export_run(&mut self, id: u64, ctx: &egui::Context) {
-        let Some(path) = rfd::FileDialog::new()
+    pub(super) fn export(&self) -> Option<(String, bool)> {
+        let id = self.id;
+        let path = rfd::FileDialog::new()
             .set_title(format!("Export metrics · Run #{id}"))
-            .set_file_name(format!("n-queens-run-{id}.csv"))
+            .set_file_name(self.csv_file_name())
             .add_filter("CSV", &["csv"])
-            .save_file()
-        else {
-            return;
-        };
-        let Some(run) = self.archive.get(id) else {
-            return;
-        };
+            .save_file()?;
         let name = path.file_name().map_or_else(
             || path.display().to_string(),
             |name| name.display().to_string(),
         );
-        match run.export_csv(&path) {
-            Ok(()) => self.notify(ctx, format!("Exported run #{id} to {name}"), false),
-            Err(error) => self.notify(ctx, format!("Could not export run #{id}: {error}"), true),
-        }
+        Some(match self.export_csv(&path) {
+            Ok(()) => (format!("Exported run #{id} to {name}"), false),
+            Err(error) => (format!("Could not export run #{id}: {error}"), true),
+        })
     }
 
     /// Hands the CSV to the browser, which saves it like any other download.
     #[cfg(target_arch = "wasm32")]
-    fn export_run(&mut self, id: u64, ctx: &egui::Context) {
-        let Some(run) = self.archive.get(id) else {
-            return;
-        };
-        let name = format!("n-queens-run-{id}.csv");
-        match download(&name, &run.csv()) {
-            Ok(()) => self.notify(ctx, format!("Exported run #{id} as {name}"), false),
-            Err(error) => self.notify(ctx, format!("Could not export run #{id}: {error}"), true),
-        }
-    }
-
-    fn rerun_saved(&mut self, id: u64, ctx: &egui::Context) -> bool {
-        if self.running.is_some() {
-            return false;
-        }
-        let Some(run) = self.archive.get(id) else {
-            return false;
-        };
-        self.config = run.result.config.clone();
-        self.start_run(ctx);
-        true
-    }
-
-    /// Completing an A/B pair brings the comparison chart into view.
-    fn toggle_comparison(&mut self, slot: usize, id: u64) {
-        self.archive.toggle_comparison(slot, id);
-        if self.archive.compare.iter().all(Option::is_some) {
-            self.chart_view = ChartView::Comparison;
-        }
-    }
-
-    pub(super) fn draw_run_history(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.heading("Run history");
-        ui.weak("Last 10 completed runs · this session only");
-        if self.archive.runs.is_empty() {
-            ui.label("Completed and cancelled runs appear here.");
-        }
-        if self.archive.viewed.is_some() && ui.button("View current run").clicked() {
-            self.archive.viewed = None;
-            self.selected_queen = None;
-            self.board_view = BoardView::default();
-        }
-        // Only cheap Arc clones: snapshots and boards are never copied during layout.
-        let runs: Vec<_> = self.archive.runs.iter().rev().cloned().collect();
-        for run in runs {
-            let result = &run.result;
-            ui.push_id(run.id, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    if ui
-                        .selectable_label(
-                            self.archive.viewed == Some(run.id),
-                            format!("Run #{}", run.id),
-                        )
-                        .clicked()
-                    {
-                        self.archive.viewed = Some(run.id);
-                        self.selected_queen = None;
-                        self.board_view = BoardView::default();
-                        self.chart_view = ChartView::Metrics;
-                    }
-                    ui.label(result.stop_reason.to_string());
-                    for (slot, name) in [(0, "A"), (1, "B")] {
-                        if ui
-                            .selectable_label(self.archive.compare[slot] == Some(run.id), name)
-                            .on_hover_text(format!("Select comparison {name}"))
-                            .clicked()
-                        {
-                            self.toggle_comparison(slot, run.id);
-                        }
-                    }
-                });
-                ui.label(format!(
-                    "{} · {}×{} · seed {} · {} · {}",
-                    solver_name(result.config.solver),
-                    result.config.board_size,
-                    result.config.board_size,
-                    result.config.seed,
-                    attacking_pairs(result.best_conflicts_sum),
-                    format_ms(result.total_elapsed_ms)
-                ));
-                ui.collapsing("Settings", |ui| draw_settings(ui, &result.config));
-                ui.horizontal_wrapped(|ui| {
-                    if ui
-                        .add_enabled(self.running.is_none(), egui::Button::new("Rerun"))
-                        .clicked()
-                    {
-                        self.rerun_saved(run.id, ctx);
-                    }
-                    if ui
-                        .button("Copy CLI command")
-                        .on_hover_text("Copy a command to run from this project's directory")
-                        .clicked()
-                    {
-                        ctx.copy_text(result.config.cli_command());
-                        self.notify(ctx, format!("Copied command for run #{}", run.id), false);
-                    }
-                    if ui
-                        .button("Export metrics")
-                        .on_hover_text("Save this run's retained metrics as CSV")
-                        .clicked()
-                    {
-                        self.export_run(run.id, ctx);
-                    }
-                });
-                ui.separator();
-            });
-        }
-    }
-
-    pub(super) fn draw_comparison(&self, ui: &mut egui::Ui) {
-        let pair = self
-            .archive
-            .compare
-            .map(|id| id.and_then(|id| self.archive.get(id)));
-        let [Some(a), Some(b)] = pair else {
-            ui.label("Mark one run A and another B in run history to compare their convergence.");
-            return;
-        };
-        let (solver_a, solver_b) = (a.result.config.solver, b.result.config.solver);
-        let x_label = if solver_a == solver_b {
-            Step::of(solver_a).title
-        } else {
-            "Epoch / pass"
-        };
-        ui.label(comparison_context(&a.result.config, &b.result.config));
-        ui.weak(format!(
-            "Best-board attacking pairs by {} · sampled points · dashed lines mark restarts",
-            x_label.to_lowercase()
-        ));
-        let colors = Palette::of(ui.ctx()).compare();
-        let series: Vec<_> = [a, b]
-            .iter()
-            .enumerate()
-            .map(|(index, run)| ChartSeries {
-                label: format!("{} · Run #{}", if index == 0 { "A" } else { "B" }, run.id),
-                color: colors[index],
-                values: run
-                    .result
-                    .history
-                    .points
-                    .iter()
-                    .map(|point| (point.step(), plot_value(point.best_conflicts_sum())))
-                    .collect(),
-            })
-            .collect();
-        let markers: Vec<_> = [a, b]
-            .iter()
-            .enumerate()
-            .flat_map(|(index, run)| {
-                run.result
-                    .history
-                    .restart_epochs
-                    .iter()
-                    .map(move |&epoch| ChartMarker {
-                        epoch,
-                        label: format!("Run #{} restart", run.id),
-                        color: colors[index],
-                    })
-            })
-            .collect();
-        Chart {
-            title: "Convergence",
-            x_label,
-            height: plot_height(ui, 1),
-            scale: ChartScale::conflicts(self.log_conflicts),
-            link: None,
-        }
-        .show(ui, (a.id, b.id), &series, &markers);
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "Matches the native export, whose save dialog can be dismissed."
+    )]
+    pub(super) fn export(&self) -> Option<(String, bool)> {
+        let id = self.id;
+        let name = self.csv_file_name();
+        Some(match download(&name, &self.csv()) {
+            Ok(()) => (format!("Exported run #{id} as {name}"), false),
+            Err(error) => (format!("Could not export run #{id}: {error}"), true),
+        })
     }
 }
 
@@ -461,13 +339,8 @@ fn download(file_name: &str, contents: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use eframe::egui::Vec2;
-
     use super::*;
-    use crate::gui::{
-        config::GuiPreset,
-        worker::{MAX_CHART_POINTS, tests::finished_run as finished},
-    };
+    use crate::gui::worker::{MAX_CHART_POINTS, tests::finished_run as finished};
 
     #[test]
     fn archive_evicts_oldest_and_clears_only_stale_selections() {
@@ -477,39 +350,25 @@ mod tests {
             ..Default::default()
         });
         let mut archive = RunArchive::default();
+        assert!(archive.is_empty());
         for _ in 0..10 {
             archive.record(Arc::clone(&result));
         }
         archive.viewed = Some(1);
         archive.compare = [Some(1), Some(2)];
+        assert!(archive.comparison_pair().is_some());
         assert_eq!(archive.record(result), 11);
-        assert_eq!(archive.runs.len(), 10);
+        assert_eq!(archive.len(), 10);
         assert!(archive.get(1).is_none());
         assert_eq!(archive.viewed, None);
         assert_eq!(archive.compare, [None, Some(2)]);
+        assert!(archive.comparison_pair().is_none());
         archive.toggle_comparison(0, 2);
         assert_eq!(archive.compare, [Some(2), None]);
         archive.toggle_comparison(1, 999);
         assert_eq!(archive.compare, [Some(2), None]);
-    }
-
-    #[test]
-    fn saved_rerun_uses_original_configuration_and_preserves_history() {
-        let original = GuiPreset::Hybrid.config(987);
-        let result = finished(original.clone());
-        let mut app = NQueensApp::default();
-        let id = app.archive.record(result);
-        app.config.seed = 1;
-        app.archive.viewed = Some(id);
-        app.selected_queen = Some(0);
-        app.board_view.set_zoom(8.0, Vec2::splat(0.5));
-        assert!(app.rerun_saved(id, &egui::Context::default()));
-        assert!(app.config == original);
-        assert_eq!(app.archive.runs.len(), 1);
-        assert_eq!(app.archive.viewed, None);
-        assert_eq!(app.selected_queen, None);
-        assert_eq!(app.board_view, BoardView::default());
-        assert!(!app.rerun_saved(id, &egui::Context::default()));
+        let ids: Vec<_> = archive.newest_first().map(|run| run.id).collect();
+        assert_eq!(ids, (2..=11).rev().collect::<Vec<_>>());
     }
 
     #[test]
@@ -524,6 +383,37 @@ mod tests {
         assert!(!comparison_context(&a, &b).contains("Different solvers"));
         b.solver = Solver::MinConflicts;
         assert!(comparison_context(&a, &b).contains("Different solvers"));
+    }
+
+    #[test]
+    fn runs_describe_their_solver_and_settings() {
+        let run = SavedRun {
+            id: 4,
+            result: finished(GuiConfig {
+                board_size: 1,
+                population_size: 1,
+                seed: 9,
+                ..Default::default()
+            }),
+        };
+        assert_eq!(run.title(), "Run #4");
+        assert!(
+            run.summary()
+                .starts_with("GA · 1×1 · seed 9 · 0 attacking pairs · "),
+            "{}",
+            run.summary()
+        );
+        assert_eq!(run.csv_file_name(), "n-queens-run-4.csv");
+        assert_eq!(settings_lines(&run.result.config).len(), 3);
+        let min_conflicts = GuiConfig {
+            solver: Solver::MinConflicts,
+            max_epochs: 40,
+            ..Default::default()
+        };
+        assert_eq!(
+            settings_lines(&min_conflicts),
+            ["Min-conflicts · passes 40 · unsolvable experiments false"]
+        );
     }
 
     #[test]
@@ -616,43 +506,5 @@ mod tests {
         run.export_csv(&path).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), csv);
         std::fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn completing_a_comparison_pair_shows_it() {
-        let result = finished(GuiConfig::default());
-        let mut app = NQueensApp::default();
-        let a = app.archive.record(Arc::clone(&result));
-        let b = app.archive.record(result);
-        app.toggle_comparison(0, a);
-        assert_eq!(app.chart_view, ChartView::Metrics);
-        app.toggle_comparison(1, b);
-        assert_eq!(app.chart_view, ChartView::Comparison);
-    }
-
-    #[test]
-    fn history_and_comparison_layout_run_without_a_window() {
-        let result = finished(GuiConfig {
-            board_size: 3,
-            population_size: 1,
-            ..Default::default()
-        });
-        let baseline = finished(GuiConfig {
-            solver: Solver::MinConflicts,
-            board_size: 8,
-            ..Default::default()
-        });
-        let mut app = NQueensApp::default();
-        let a = app.archive.record(Arc::clone(&result));
-        let b = app.archive.record(baseline);
-        app.archive.compare = [Some(a), Some(b)];
-        app.archive.viewed = Some(a);
-        let ctx = egui::Context::default();
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.draw_run_history(ui, &ctx);
-            app.draw_comparison(ui);
-        });
-        assert_ne!(output.shapes.len(), 0);
-        output.drop_without_applying_deltas();
     }
 }
