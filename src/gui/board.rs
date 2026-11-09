@@ -1,76 +1,148 @@
-//! The zoomable board with queen selection and conflict highlighting.
+//! Board geometry and text: zoom and pan, hit testing, attackers, and what the
+//! board says about a queen. Drawing is left to the toolkit.
 
-use eframe::egui::{self, Align2, FontId, Pos2, Rect, RichText, Sense, Stroke, Vec2};
+use super::{attacking_pairs, palette::Palette, palette::Rgba};
 
-use super::{attacking_pairs, palette::Palette};
+/// The board never shrinks below this side, in points.
+pub(super) const MIN_BOARD_SIDE: f32 = 160.0;
+/// Room below the board for the selection details, so selecting a queen never resizes it.
+pub(super) const SELECTION_INFO_HEIGHT: f32 = 44.0;
+/// Below this cell side, in points, the board draws a sparse grid instead of squares.
+pub(super) const MIN_SQUARE_CELL: f32 = 6.0;
+/// Below this cell side, queens carry no attacker count.
+pub(super) const MIN_LABELLED_CELL: f32 = 16.0;
+pub(super) const MAX_ZOOM: f32 = 1024.0;
+/// Each zoom button press scales by this factor.
+pub(super) const ZOOM_STEP: f32 = 1.5;
+/// Attackers listed by name before the rest are counted.
+const LISTED_ATTACKERS: usize = 8;
 
-const MIN_BOARD_SIDE: f32 = 160.0;
-const SELECTION_INFO_HEIGHT: f32 = 44.0;
+pub(super) const EMPTY_BOARD_TEXT: &str = "Run the solver to draw a board";
+pub(super) const HELP_TEXT: [&[&str]; 4] = [
+    &["A number on a queen counts the queens attacking it; Q marks a queen nobody attacks."],
+    &[
+        "Click a queen to inspect its conflicts. Click it again or an empty square to clear.",
+        "Press Escape while the board is focused to clear the selection. Otherwise Escape cancels a running solver.",
+    ],
+    &[
+        "Drag to pan · Ctrl/Cmd + scroll or pinch to zoom.",
+        "Fit resets the zoom and pan to show the whole board.",
+    ],
+    &["Coordinates are 1-based: columns left to right, rows top to bottom."],
+];
 
-pub(super) fn draw_empty_board(ui: &mut egui::Ui) {
-    let side = ui.available_size().min_elem().max(MIN_BOARD_SIDE);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(side, side), Sense::hover());
-    let palette = Palette::of(ui.ctx());
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, egui::CornerRadius::ZERO, palette.empty_board);
-    painter.text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        "Run the solver to draw a board",
-        FontId::proportional(18.0),
-        palette.empty_board_text,
-    );
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct Point {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Point {
+    pub(super) const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+}
+
+/// An axis-aligned square, the only shape a board or its viewport takes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Square {
+    pub left: f32,
+    pub top: f32,
+    pub side: f32,
+}
+
+impl Square {
+    pub(super) fn right(self) -> f32 {
+        self.left + self.side
+    }
+
+    pub(super) fn bottom(self) -> f32 {
+        self.top + self.side
+    }
 }
 
 /// Pan is measured in viewport widths, so resizing preserves the viewed board region.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct BoardView {
     zoom: f32,
-    pan: Vec2,
+    pan: Point,
 }
 
 impl Default for BoardView {
     fn default() -> Self {
         Self {
             zoom: 1.0,
-            pan: Vec2::ZERO,
+            pan: Point::default(),
         }
     }
 }
 
 impl BoardView {
-    pub(super) fn set_zoom(&mut self, zoom: f32, anchor: Vec2) {
+    pub(super) const fn zoom(self) -> f32 {
+        self.zoom
+    }
+
+    /// Zooms around `anchor`, given as a fraction of the viewport, which stays put on screen.
+    pub(super) fn set_zoom(&mut self, zoom: f32, anchor: Point) {
         if !zoom.is_finite() || !anchor.x.is_finite() || !anchor.y.is_finite() {
             return;
         }
-        let next = zoom.clamp(1.0, 1024.0);
-        self.pan = anchor - (anchor - self.pan) * (next / self.zoom);
+        let next = zoom.clamp(1.0, MAX_ZOOM);
+        let scale = next / self.zoom;
+        self.pan = Point::new(
+            (anchor.x - self.pan.x).mul_add(-scale, anchor.x),
+            (anchor.y - self.pan.y).mul_add(-scale, anchor.y),
+        );
         self.zoom = next;
         self.clamp_pan();
     }
 
-    fn move_by(&mut self, delta: Vec2) {
+    pub(super) fn zoom_in(&mut self) {
+        self.set_zoom(self.zoom * ZOOM_STEP, Point::new(0.5, 0.5));
+    }
+
+    pub(super) fn zoom_out(&mut self) {
+        self.set_zoom(self.zoom / ZOOM_STEP, Point::new(0.5, 0.5));
+    }
+
+    pub(super) fn can_zoom_in(self) -> bool {
+        self.zoom < MAX_ZOOM
+    }
+
+    pub(super) fn can_zoom_out(self) -> bool {
+        self.zoom > 1.0
+    }
+
+    pub(super) fn zoom_label(self) -> String {
+        format!("{:.0}%", self.zoom * 100.0)
+    }
+
+    /// Pans by `delta`, given as a fraction of the viewport.
+    pub(super) fn move_by(&mut self, delta: Point) {
         if !delta.x.is_finite() || !delta.y.is_finite() {
             return;
         }
-        self.pan += delta;
+        self.pan = Point::new(self.pan.x + delta.x, self.pan.y + delta.y);
         self.clamp_pan();
     }
 
     fn clamp_pan(&mut self) {
-        self.pan = self.pan.clamp(Vec2::splat(1.0 - self.zoom), Vec2::ZERO);
+        let min = 1.0 - self.zoom;
+        self.pan = Point::new(self.pan.x.clamp(min, 0.0), self.pan.y.clamp(min, 0.0));
     }
 
-    fn rect(self, viewport: Rect) -> Rect {
-        Rect::from_min_size(
-            viewport.min + self.pan * viewport.width(),
-            viewport.size() * self.zoom,
-        )
+    /// Where the whole board lies, zoomed and panned, for a board shown in `viewport`.
+    pub(super) fn board(self, viewport: Square) -> Square {
+        Square {
+            left: self.pan.x.mul_add(viewport.side, viewport.left),
+            top: self.pan.y.mul_add(viewport.side, viewport.top),
+            side: viewport.side * self.zoom,
+        }
     }
 }
 
 // A board dimension and its coordinate indices fit the solver's u16 range.
-fn board_units(value: usize) -> f32 {
+pub(super) fn board_units(value: usize) -> f32 {
     f32::from(u16::try_from(value).expect("board coordinate fits u16"))
 }
 
@@ -79,18 +151,44 @@ fn board_units(value: usize) -> f32 {
     clippy::cast_sign_loss,
     reason = "Screen-space indices intentionally round down; conversion saturates and callers bound indices to the board."
 )]
-const fn cell_index(value: f32) -> usize {
+pub(super) const fn cell_index(value: f32) -> usize {
     value.max(0.0) as usize
 }
 
-fn visible_cells(start: f32, cell: f32, min: f32, max: f32, size: usize) -> std::ops::Range<usize> {
+/// The cells, out of `size`, that overlap `min..max` when cells of side `cell` start at `start`.
+pub(super) fn visible_cells(
+    start: f32,
+    cell: f32,
+    min: f32,
+    max: f32,
+    size: usize,
+) -> std::ops::Range<usize> {
     let first = cell_index(((min - start) / cell).floor()).min(size);
     let end = cell_index(((max - start) / cell).ceil()).min(size);
     first..end.max(first)
 }
 
+/// Spacing between coordinate labels and the gutter that fits the widest row label,
+/// in points, so long numbers never collide.
+pub(super) fn label_spacing_and_gutter(size: usize) -> (f32, f32) {
+    let digits = board_units(size.to_string().len());
+    let label_spacing = 7.0f32.mul_add(digits, 6.0).max(24.0);
+    let gutter = 7.0f32.mul_add(digits, 8.0).max(28.0);
+    (label_spacing, gutter)
+}
+
+/// Every how many coordinates a label fits, for cells of side `cell`.
+pub(super) fn label_stride(label_spacing: f32, cell: f32) -> usize {
+    cell_index((label_spacing / cell).ceil()).max(1)
+}
+
+/// Every how many lines the sparse grid draws one, for cells of side `cell`.
+pub(super) fn sparse_grid_stride(cell: f32) -> usize {
+    cell_index((24.0 / cell).ceil()).max(1)
+}
+
 /// Positions are a permutation, so only diagonals can contain attacking queens.
-fn attacking_columns(positions: &[u16], selected: usize) -> Vec<usize> {
+pub(super) fn attacking_columns(positions: &[u16], selected: usize) -> Vec<usize> {
     let Some(&row) = positions.get(selected) else {
         return Vec::new();
     };
@@ -104,385 +202,96 @@ fn attacking_columns(positions: &[u16], selected: usize) -> Vec<usize> {
         .collect()
 }
 
-fn queen_at_pointer(rect: Rect, positions: &[u16], pointer: Pos2) -> Option<usize> {
+/// Which of the selected queen's diagonals hold an attacker: `[descending, ascending]`,
+/// where descending runs from the top left to the bottom right.
+pub(super) fn attacked_diagonals(
+    positions: &[u16],
+    selected: usize,
+    attackers: &[usize],
+) -> [bool; 2] {
+    let Some(&row) = positions.get(selected) else {
+        return [false; 2];
+    };
+    let row = usize::from(row);
+    [true, false].map(|descending| {
+        attackers.iter().any(|&other| {
+            ((other > selected) == (usize::from(positions[other]) > row)) == descending
+        })
+    })
+}
+
+pub(super) fn queen_at_pointer(board: Square, positions: &[u16], pointer: Point) -> Option<usize> {
     if positions.is_empty()
-        || rect.width() <= 0.0
-        || rect.height() <= 0.0
-        || pointer.x < rect.left()
-        || pointer.x >= rect.right()
-        || pointer.y < rect.top()
-        || pointer.y >= rect.bottom()
+        || board.side <= 0.0
+        || pointer.x < board.left
+        || pointer.x >= board.right()
+        || pointer.y < board.top
+        || pointer.y >= board.bottom()
     {
         return None;
     }
-    let column =
-        cell_index((pointer.x - rect.left()) / rect.width() * board_units(positions.len()));
-    let row = cell_index((pointer.y - rect.top()) / rect.height() * board_units(positions.len()));
+    let size = board_units(positions.len());
+    let column = cell_index((pointer.x - board.left) / board.side * size);
+    let row = cell_index((pointer.y - board.top) / board.side * size);
     positions
         .get(column)
         .filter(|&&queen_row| usize::from(queen_row) == row)
         .map(|_| column)
 }
 
-fn queen_center(rect: Rect, size: usize, column: usize, row: usize) -> Pos2 {
-    let cell = rect.width() / board_units(size);
-    Pos2::new(
-        (board_units(column) + 0.5).mul_add(cell, rect.left()),
-        (board_units(row) + 0.5).mul_add(cell, rect.top()),
+pub(super) fn queen_center(board: Square, size: usize, column: usize, row: usize) -> Point {
+    let cell = board.side / board_units(size);
+    Point::new(
+        (board_units(column) + 0.5).mul_add(cell, board.left),
+        (board_units(row) + 0.5).mul_add(cell, board.top),
     )
 }
 
 /// Endpoints of a full diagonal, clipped to the board's outer edges.
-fn diagonal_segment(rect: Rect, center: Pos2, descending: bool) -> [Pos2; 2] {
+pub(super) fn diagonal_segment(board: Square, center: Point, descending: bool) -> [Point; 2] {
     if descending {
-        let before = (center.x - rect.left()).min(center.y - rect.top());
-        let after = (rect.right() - center.x).min(rect.bottom() - center.y);
-        [center - Vec2::splat(before), center + Vec2::splat(after)]
-    } else {
-        let before = (center.x - rect.left()).min(rect.bottom() - center.y);
-        let after = (rect.right() - center.x).min(center.y - rect.top());
+        let before = (center.x - board.left).min(center.y - board.top);
+        let after = (board.right() - center.x).min(board.bottom() - center.y);
         [
-            center + Vec2::new(-before, before),
-            center + Vec2::new(after, -after),
+            Point::new(center.x - before, center.y - before),
+            Point::new(center.x + after, center.y + after),
+        ]
+    } else {
+        let before = (center.x - board.left).min(board.bottom() - center.y);
+        let after = (board.right() - center.x).min(center.y - board.top);
+        [
+            Point::new(center.x - before, center.y + before),
+            Point::new(center.x + after, center.y - after),
         ]
     }
 }
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "Keep immediate-mode board interaction and its layered rendering in the same frame scope."
-)]
-pub(super) fn draw_board(
-    ui: &mut egui::Ui,
-    positions: &[u16],
-    conflicts: &[u32],
-    conflicts_sum: u32,
-    selected: &mut Option<usize>,
-    view: &mut BoardView,
-) {
-    let size = positions.len();
-    if size == 0 {
-        *selected = None;
-        draw_empty_board(ui);
-        return;
-    }
-    if selected.is_some_and(|column| column >= size) {
-        *selected = None;
-    }
-
-    ui.horizontal_wrapped(|ui| {
-        ui.heading("Board");
-        ui.label(format!("{size} queens · {}", attacking_pairs(conflicts_sum)));
-        if ui
-            .add_enabled(view.zoom > 1.0, egui::Button::new("−"))
-            .on_hover_text("Zoom out")
-            .clicked()
-        {
-            view.set_zoom(view.zoom / 1.5, Vec2::splat(0.5));
-        }
-        if ui
-            .add_enabled(view.zoom < 1024.0, egui::Button::new("+"))
-            .on_hover_text("Zoom in")
-            .clicked()
-        {
-            view.set_zoom(view.zoom * 1.5, Vec2::splat(0.5));
-        }
-        ui.label(format!("{:.0}%", view.zoom * 100.0));
-        if ui.button("Fit").on_hover_text("Fit the whole board").clicked() {
-            *view = BoardView::default();
-        }
-        ui.menu_button("Help", |ui| {
-            ui.set_max_width(300.0);
-            ui.label("A number on a queen counts the queens attacking it; Q marks a queen nobody attacks.");
-            ui.separator();
-            ui.label("Click a queen to inspect its conflicts. Click it again or an empty square to clear.");
-            ui.label("Press Escape while the board is focused to clear the selection. Otherwise Escape cancels a running solver.");
-            ui.separator();
-            ui.label("Drag to pan · Ctrl/Cmd + scroll or pinch to zoom.");
-            ui.label("Fit resets the zoom and pan to show the whole board.");
-            ui.separator();
-            ui.label("Coordinates are 1-based: columns left to right, rows top to bottom.");
-        });
-    });
-    // Labels sit at least one label width apart, so long numbers do not collide, and the
-    // gutter fits the widest row label to the left of the board.
-    let digits = board_units(size.to_string().len());
-    let label_spacing = 7.0f32.mul_add(digits, 6.0).max(24.0);
-    let gutter = 7.0f32.mul_add(digits, 8.0).max(28.0);
-    // Keep room below for the selection details so selecting a queen never resizes the board.
-    let board_side = (ui.available_width() - gutter)
-        .min(ui.available_height() - gutter - SELECTION_INFO_HEIGHT)
-        .max(MIN_BOARD_SIDE);
-    let (outer, response) =
-        ui.allocate_exact_size(Vec2::splat(board_side + gutter), Sense::click_and_drag());
-    let viewport = Rect::from_min_size(outer.min + Vec2::splat(gutter), Vec2::splat(board_side));
-    if response.dragged() {
-        view.move_by(response.drag_delta() / board_side);
-    }
-    if let Some(pointer) = response
-        .hover_pos()
-        .filter(|point| viewport.contains(*point))
-    {
-        let zoom_delta = ui.input(eframe::egui::InputState::zoom_delta);
-        if (zoom_delta - 1.0).abs() > f32::EPSILON {
-            view.set_zoom(
-                view.zoom * zoom_delta,
-                (pointer - viewport.min) / board_side,
-            );
-        }
-    }
-    let rect = view.rect(viewport);
-    let hovered = response
-        .hover_pos()
-        .filter(|point| viewport.contains(*point))
-        .and_then(|pointer| queen_at_pointer(rect, positions, pointer));
-    if response.clicked() {
-        *selected = if hovered == *selected { None } else { hovered };
-    }
-    // Consumed so the app-wide Escape shortcut (cancel run) does not also fire.
-    if response.has_focus()
-        && selected.is_some()
-        && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-    {
-        *selected = None;
-    }
-    if let Some(column) = hovered {
-        let count = conflicts.get(column).copied().unwrap_or_default();
-        response
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text(format!(
-                "Column {}, row {}\n{} attacking queen{}\nClick to inspect",
-                column + 1,
-                usize::from(positions[column]) + 1,
-                count,
-                if count == 1 { "" } else { "s" }
-            ));
-    }
-    let palette = Palette::of(ui.ctx());
-    let painter = ui.painter_at(viewport);
-    // The last column and row labels are centred on the board edge; let them overhang it.
-    let axes_painter = ui.painter_at(
-        outer
-            .with_max_x(outer.max.x + label_spacing / 2.0)
-            .with_max_y(outer.max.y + 8.0),
-    );
-    let cell = rect.width() / board_units(size);
-    if cell >= 6.0 {
-        draw_board_cells(&painter, palette, rect, size, cell);
-    } else {
-        draw_sparse_grid(&painter, palette, rect, size, cell);
-    }
-
-    let attackers = selected
-        .map(|column| attacking_columns(positions, column))
-        .unwrap_or_default();
-    let mut is_attacker = vec![false; size];
-    for &column in &attackers {
-        is_attacker[column] = true;
-    }
-    if let Some(column) = *selected {
-        let row = usize::from(positions[column]);
-        let center = queen_center(rect, size, column, row);
-        for descending in [true, false] {
-            if attackers.iter().any(|&other| {
-                ((other > column) == (usize::from(positions[other]) > row)) == descending
-            }) {
-                let segment = diagonal_segment(rect, center, descending);
-                painter.line_segment(
-                    segment,
-                    Stroke::new((cell * 0.24).clamp(3.0, 10.0), palette.attack_diagonal),
-                );
-                painter.line_segment(segment, Stroke::new(1.5, palette.attacker));
-            }
-        }
-    }
-
-    // Keep coordinates legible on large boards, including the selected row/column.
-    let stride = cell_index((label_spacing / cell).ceil()).max(1);
-    for index in 0..size {
-        let regular = is_labelled_coordinate(index, size, stride);
-        let selected_column = *selected == Some(index);
-        let selected_row = selected.is_some_and(|column| usize::from(positions[column]) == index);
-        let coordinate = (index + 1).to_string();
-        let font = FontId::monospace(11.0);
-        let x = (board_units(index) + 0.5).mul_add(cell, rect.left());
-        let y = (board_units(index) + 0.5).mul_add(cell, rect.top());
-        if (regular || selected_column) && x >= viewport.left() && x <= viewport.right() {
-            axes_painter.text(
-                Pos2::new(x, viewport.top() - 12.0),
-                Align2::CENTER_CENTER,
-                &coordinate,
-                font.clone(),
-                if selected_column {
-                    palette.selected_queen
-                } else {
-                    palette.coordinate
-                },
-            );
-        }
-        if (regular || selected_row) && y >= viewport.top() && y <= viewport.bottom() {
-            axes_painter.text(
-                Pos2::new(viewport.left() - 6.0, y),
-                Align2::RIGHT_CENTER,
-                &coordinate,
-                font,
-                if selected_row {
-                    palette.selected_queen
-                } else {
-                    palette.coordinate
-                },
-            );
-        }
-    }
-    for (column, &raw_row) in positions.iter().enumerate() {
-        let center = queen_center(rect, size, column, usize::from(raw_row));
-        if !viewport.expand(22.0).contains(center) {
-            continue;
-        }
-        let is_selected = *selected == Some(column);
-        let color = if is_selected {
-            palette.selected_queen
-        } else if is_attacker[column] {
-            palette.attacker
-        } else if selected.is_some() {
-            palette.queen_dimmed
-        } else {
-            palette.queen(conflicts.get(column).copied().unwrap_or_default())
-        };
-        let radius = (cell * 0.34).clamp(2.0, 18.0);
-        painter.circle_filled(center, radius, color);
-        if is_selected {
-            painter.circle_stroke(
-                center,
-                radius + 3.0,
-                Stroke::new(2.0, palette.selection_ring),
-            );
-        } else if is_attacker[column] {
-            // Square outlines distinguish attackers without relying on color alone.
-            painter.rect_stroke(
-                Rect::from_center_size(center, Vec2::splat((cell * 0.88).max(5.0))),
-                egui::CornerRadius::ZERO,
-                Stroke::new(1.5, palette.attacker),
-                egui::StrokeKind::Inside,
-            );
-        }
-        if cell >= 16.0
-            && let Some((label, size)) = queen_label(
-                conflicts.get(column).copied().unwrap_or_default(),
-                (cell * 0.42).clamp(10.0, 24.0),
-                radius,
-            )
-        {
-            painter.text(
-                center,
-                Align2::CENTER_CENTER,
-                label,
-                FontId::proportional(size),
-                palette.queen_label,
-            );
-        }
-    }
-    if let Some(column) = *selected {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(
-                RichText::new(format!(
-                    "Selected: column {}, row {}",
-                    column + 1,
-                    usize::from(positions[column]) + 1
-                ))
-                .color(palette.selected_queen),
-            );
-            if ui.small_button("Clear selection").clicked() {
-                *selected = None;
-            }
-        });
-        if attackers.is_empty() {
-            ui.label("This queen has no conflicts.");
-        } else {
-            let coordinates = attackers
-                .iter()
-                .take(8)
-                .map(|&other| format!("C{} R{}", other + 1, usize::from(positions[other]) + 1))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let more = if attackers.len() > 8 {
-                format!(" and {} more", attackers.len() - 8)
-            } else {
-                String::new()
-            };
-            ui.label(format!("Attacked by {} queen{}: {coordinates}{more}. Highlighted lines show their shared diagonals.", attackers.len(), if attackers.len() == 1 { "" } else { "s" }));
-        }
-    }
+pub(super) fn queen_radius(cell: f32) -> f32 {
+    (cell * 0.34).clamp(2.0, 18.0)
 }
 
-fn draw_board_cells(
-    painter: &egui::Painter,
-    palette: &Palette,
-    rect: Rect,
-    size: usize,
-    cell: f32,
-) {
-    let dark = palette.dark_square;
-    let light = palette.light_square;
-    let clip = painter.clip_rect();
-    for y in visible_cells(rect.top(), cell, clip.top(), clip.bottom(), size) {
-        for x in visible_cells(rect.left(), cell, clip.left(), clip.right(), size) {
-            let cell_rect = Rect::from_min_max(
-                Pos2::new(
-                    board_units(x).mul_add(cell, rect.left()),
-                    board_units(y).mul_add(cell, rect.top()),
-                ),
-                Pos2::new(
-                    board_units(x + 1).mul_add(cell, rect.left()),
-                    board_units(y + 1).mul_add(cell, rect.top()),
-                ),
-            );
-            let color = if (x + y) % 2 == 0 { light } else { dark };
-            painter.rect_filled(cell_rect, egui::CornerRadius::ZERO, color);
-        }
-    }
+pub(super) fn diagonal_band_width(cell: f32) -> f32 {
+    (cell * 0.24).clamp(3.0, 10.0)
 }
 
-fn draw_sparse_grid(
-    painter: &egui::Painter,
-    palette: &Palette,
-    rect: Rect,
-    size: usize,
-    cell: f32,
-) {
-    painter.rect_filled(rect, egui::CornerRadius::ZERO, palette.sparse_board);
-    let stroke = Stroke::new(1.0, palette.sparse_grid_line);
-    let clip = painter.clip_rect();
-    let stride = cell_index((24.0 / cell).ceil()).max(1);
-    for index in visible_cells(rect.left(), cell, clip.left(), clip.right(), size + 1)
-        .filter(|index| index.is_multiple_of(stride))
-    {
-        let x = board_units(index).mul_add(cell, rect.left());
-        painter.line_segment(
-            [Pos2::new(x, clip.top()), Pos2::new(x, clip.bottom())],
-            stroke,
-        );
-    }
-    for index in visible_cells(rect.top(), cell, clip.top(), clip.bottom(), size + 1)
-        .filter(|index| index.is_multiple_of(stride))
-    {
-        let y = board_units(index).mul_add(cell, rect.top());
-        painter.line_segment(
-            [Pos2::new(clip.left(), y), Pos2::new(clip.right(), y)],
-            stroke,
-        );
-    }
+/// Side of the square outline drawn around an attacker.
+pub(super) fn attacker_outline_side(cell: f32) -> f32 {
+    (cell * 0.88).max(5.0)
 }
 
-/// The attacker count, so conflicts read without relying on color; "Q" when there are none.
+pub(super) fn queen_font_size(cell: f32) -> f32 {
+    (cell * 0.42).clamp(10.0, 24.0)
+}
+
 /// Every `stride`-th coordinate is labelled, plus the last one; a sampled label
 /// closer than `stride` to the last is dropped so the two never overlap.
-const fn is_labelled_coordinate(index: usize, size: usize, stride: usize) -> bool {
+pub(super) const fn is_labelled_coordinate(index: usize, size: usize, stride: usize) -> bool {
     index + 1 == size || (index.is_multiple_of(stride) && size - 1 - index >= stride)
 }
 
+/// The attacker count, so conflicts read without relying on color; "Q" when there are none.
 /// Longer counts get a smaller font, and labels that still overflow the queen are skipped.
-fn queen_label(attackers: u32, font_size: f32, radius: f32) -> Option<(String, f32)> {
+pub(super) fn queen_label(attackers: u32, font_size: f32, radius: f32) -> Option<(String, f32)> {
     let label = if attackers == 0 {
         "Q".to_owned()
     } else {
@@ -499,6 +308,96 @@ fn queen_label(attackers: u32, font_size: f32, radius: f32) -> Option<(String, f
     (0.6 * size * digits <= 2.0 * radius).then_some((label, size))
 }
 
+/// How a queen is drawn, given the current selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum QueenRole {
+    Selected,
+    /// Attacks the selected queen; also outlined so it does not rely on color alone.
+    Attacker,
+    /// Neither selected nor attacking while a queen is selected.
+    Dimmed,
+    /// No selection: colored by its attacker count.
+    Normal {
+        conflicts: u32,
+    },
+}
+
+impl QueenRole {
+    pub(super) const fn of(
+        column: usize,
+        selected: Option<usize>,
+        is_attacker: bool,
+        conflicts: u32,
+    ) -> Self {
+        match selected {
+            Some(selected) if selected == column => Self::Selected,
+            Some(_) if is_attacker => Self::Attacker,
+            Some(_) => Self::Dimmed,
+            None => Self::Normal { conflicts },
+        }
+    }
+
+    pub(super) const fn fill(self, palette: &Palette) -> Rgba {
+        match self {
+            Self::Selected => palette.selected_queen,
+            Self::Attacker => palette.attacker,
+            Self::Dimmed => palette.queen_dimmed,
+            Self::Normal { conflicts } => palette.queen(conflicts),
+        }
+    }
+}
+
+/// The heading line next to "Board".
+pub(super) fn board_summary(size: usize, conflicts_sum: u32) -> String {
+    format!("{size} queens · {}", attacking_pairs(conflicts_sum))
+}
+
+pub(super) fn hover_text(positions: &[u16], conflicts: &[u32], column: usize) -> String {
+    let count = conflicts.get(column).copied().unwrap_or_default();
+    format!(
+        "Column {}, row {}\n{} attacking queen{}\nClick to inspect",
+        column + 1,
+        usize::from(positions[column]) + 1,
+        count,
+        if count == 1 { "" } else { "s" }
+    )
+}
+
+/// The selected queen's coordinates, and who attacks it.
+pub(super) fn selection_text(
+    positions: &[u16],
+    selected: usize,
+    attackers: &[usize],
+) -> (String, String) {
+    let title = format!(
+        "Selected: column {}, row {}",
+        selected + 1,
+        usize::from(positions[selected]) + 1
+    );
+    if attackers.is_empty() {
+        return (title, "This queen has no conflicts.".to_owned());
+    }
+    let coordinates = attackers
+        .iter()
+        .take(LISTED_ATTACKERS)
+        .map(|&other| format!("C{} R{}", other + 1, usize::from(positions[other]) + 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let more = if attackers.len() > LISTED_ATTACKERS {
+        format!(" and {} more", attackers.len() - LISTED_ATTACKERS)
+    } else {
+        String::new()
+    };
+    (
+        title,
+        format!(
+            "Attacked by {} queen{}: {coordinates}{more}. Highlighted lines show their shared diagonals.",
+            attackers.len(),
+            if attackers.len() == 1 { "" } else { "s" }
+        ),
+    )
+}
+
 #[cfg(test)]
 #[allow(
     clippy::float_cmp,
@@ -508,29 +407,43 @@ mod tests {
     use super::*;
     use crate::ga;
 
+    fn square(left: f32, top: f32, side: f32) -> Square {
+        Square { left, top, side }
+    }
+
     #[test]
     fn board_zoom_preserves_pointer_anchor_and_pan_is_bounded() {
-        let viewport = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::splat(400.0));
+        let viewport = square(10.0, 20.0, 400.0);
         let positions = [1, 3, 0, 2];
         let mut view = BoardView::default();
         let point = queen_center(viewport, 4, 2, 0);
-        let anchor = (point - viewport.min) / viewport.width();
+        let anchor = Point::new(
+            (point.x - viewport.left) / viewport.side,
+            (point.y - viewport.top) / viewport.side,
+        );
         view.set_zoom(4.0, anchor);
         assert_eq!(
-            queen_at_pointer(view.rect(viewport), &positions, point),
+            queen_at_pointer(view.board(viewport), &positions, point),
             Some(2)
         );
-        view.move_by(Vec2::splat(100.0));
-        assert_eq!(view.pan, Vec2::ZERO);
-        view.move_by(Vec2::splat(-100.0));
-        assert_eq!(view.pan, Vec2::splat(-3.0));
+        view.move_by(Point::new(100.0, 100.0));
+        assert_eq!(view.pan, Point::default());
+        view.move_by(Point::new(-100.0, -100.0));
+        assert_eq!(view.pan, Point::new(-3.0, -3.0));
         let before = view;
         view.set_zoom(f32::NAN, anchor);
         assert_eq!(view, before);
         view.set_zoom(1.0, anchor);
         assert_eq!(view, BoardView::default());
         view.set_zoom(100_000.0, anchor);
-        assert_eq!(view.zoom, 1024.0);
+        assert_eq!(view.zoom(), MAX_ZOOM);
+        assert!(!view.can_zoom_in());
+        view = BoardView::default();
+        assert!(!view.can_zoom_out());
+        view.zoom_in();
+        assert_eq!(view.zoom_label(), "150%");
+        view.zoom_out();
+        assert_eq!(view, BoardView::default());
     }
 
     #[test]
@@ -542,19 +455,12 @@ mod tests {
     }
 
     #[test]
-    fn zoomed_large_board_layout_is_bounded_without_a_window() {
-        let ctx = egui::Context::default();
-        let positions: Vec<_> = (0..u16::MAX).collect();
-        let conflicts = vec![u32::from(u16::MAX) - 1; positions.len()];
-        let mut selected = Some(32_000);
-        let mut view = BoardView::default();
-        view.set_zoom(1024.0, Vec2::splat(0.5));
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            draw_board(ui, &positions, &conflicts, 1, &mut selected, &mut view);
-        });
-        assert_ne!(output.shapes.len(), 0);
-        assert!(output.shapes.len() < 30_000);
-        output.drop_without_applying_deltas();
+    fn labels_and_gutter_fit_the_widest_coordinate() {
+        assert_eq!(label_spacing_and_gutter(8), (24.0, 28.0));
+        assert_eq!(label_spacing_and_gutter(65_535), (41.0, 43.0));
+        assert_eq!(label_stride(24.0, 30.0), 1);
+        assert_eq!(label_stride(41.0, 4.0), 11);
+        assert_eq!(sparse_grid_stride(5.0), 5);
     }
 
     #[test]
@@ -585,29 +491,45 @@ mod tests {
     }
 
     #[test]
+    fn only_diagonals_holding_an_attacker_are_highlighted() {
+        // Columns 0 and 4 share column 2's descending diagonal; columns 1 and 3 its ascending one.
+        let positions = [0, 3, 2, 1, 4];
+        let attackers = attacking_columns(&positions, 2);
+        assert_eq!(attackers, [0, 1, 3, 4]);
+        assert_eq!(attacked_diagonals(&positions, 2, &attackers), [true, true]);
+        assert_eq!(attacked_diagonals(&positions, 2, &[0, 4]), [true, false]);
+        assert_eq!(attacked_diagonals(&positions, 2, &[1]), [false, true]);
+        assert_eq!(attacked_diagonals(&positions, 2, &[]), [false, false]);
+        assert_eq!(attacked_diagonals(&positions, 9, &[]), [false, false]);
+    }
+
+    #[test]
     fn board_hit_testing_distinguishes_queens_empty_squares_and_edges() {
-        let rect = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::splat(80.0));
+        let board = square(10.0, 20.0, 80.0);
         let positions = [1, 3, 0, 2];
         for (column, &row) in positions.iter().enumerate() {
             assert_eq!(
                 queen_at_pointer(
-                    rect,
+                    board,
                     &positions,
-                    queen_center(rect, 4, column, row as usize)
+                    queen_center(board, 4, column, row as usize)
                 ),
                 Some(column)
             );
         }
         for point in [
-            Pos2::new(10.0, 20.0),
-            Pos2::new(9.0, 50.0),
-            Pos2::new(90.0, 50.0),
-            Pos2::new(50.0, 100.0),
+            Point::new(10.0, 20.0),
+            Point::new(9.0, 50.0),
+            Point::new(90.0, 50.0),
+            Point::new(50.0, 100.0),
         ] {
-            assert_eq!(queen_at_pointer(rect, &positions, point), None);
+            assert_eq!(queen_at_pointer(board, &positions, point), None);
         }
-        assert_eq!(queen_at_pointer(rect, &[], rect.center()), None);
-        assert_eq!(queen_at_pointer(rect, &[0], rect.min), Some(0));
+        assert_eq!(queen_at_pointer(board, &[], Point::new(50.0, 60.0)), None);
+        assert_eq!(
+            queen_at_pointer(board, &[0], Point::new(10.0, 20.0)),
+            Some(0)
+        );
     }
 
     #[test]
@@ -635,23 +557,60 @@ mod tests {
 
     #[test]
     fn highlighted_diagonals_reach_board_edges() {
-        let rect = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::splat(80.0));
+        let board = square(10.0, 20.0, 80.0);
+        let center = Point::new(50.0, 60.0);
         assert_eq!(
-            diagonal_segment(rect, rect.center(), true),
-            [rect.left_top(), rect.right_bottom()]
+            diagonal_segment(board, center, true),
+            [Point::new(10.0, 20.0), Point::new(90.0, 100.0)]
         );
         assert_eq!(
-            diagonal_segment(rect, rect.center(), false),
-            [rect.left_bottom(), rect.right_top()]
+            diagonal_segment(board, center, false),
+            [Point::new(10.0, 100.0), Point::new(90.0, 20.0)]
         );
-        let center = Pos2::new(20.0, 50.0);
+        let center = Point::new(20.0, 50.0);
         assert_eq!(
-            diagonal_segment(rect, center, true),
-            [Pos2::new(10.0, 40.0), Pos2::new(70.0, 100.0)]
+            diagonal_segment(board, center, true),
+            [Point::new(10.0, 40.0), Point::new(70.0, 100.0)]
         );
         assert_eq!(
-            diagonal_segment(rect, center, false),
-            [Pos2::new(10.0, 60.0), Pos2::new(50.0, 20.0)]
+            diagonal_segment(board, center, false),
+            [Point::new(10.0, 60.0), Point::new(50.0, 20.0)]
         );
+    }
+
+    #[test]
+    fn queens_are_drawn_by_their_role_in_the_selection() {
+        let palette = &Palette::DARK;
+        assert_eq!(QueenRole::of(1, Some(1), false, 3), QueenRole::Selected);
+        assert_eq!(QueenRole::of(2, Some(1), true, 3), QueenRole::Attacker);
+        assert_eq!(QueenRole::of(3, Some(1), false, 3), QueenRole::Dimmed);
+        assert_eq!(
+            QueenRole::of(3, None, false, 0).fill(palette),
+            palette.success
+        );
+        assert_eq!(
+            QueenRole::of(3, None, false, 3).fill(palette),
+            palette.danger
+        );
+    }
+
+    #[test]
+    fn selection_text_lists_up_to_eight_attackers() {
+        let positions: Vec<u16> = (0..12).collect();
+        let attackers = attacking_columns(&positions, 0);
+        let (title, details) = selection_text(&positions, 0, &attackers);
+        assert_eq!(title, "Selected: column 1, row 1");
+        assert!(
+            details.starts_with("Attacked by 11 queens: C2 R2, C3 R3,"),
+            "{details}"
+        );
+        assert!(details.contains("C9 R9 and 3 more."), "{details}");
+        let (_, details) = selection_text(&[1, 3, 0, 2], 0, &[]);
+        assert_eq!(details, "This queen has no conflicts.");
+        assert_eq!(
+            hover_text(&[1, 3, 0, 2], &[0, 1, 0, 0], 1),
+            "Column 2, row 4\n1 attacking queen\nClick to inspect"
+        );
+        assert_eq!(board_summary(4, 1), "4 queens · 1 attacking pair");
     }
 }
