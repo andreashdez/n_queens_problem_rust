@@ -8,8 +8,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 app_name="N-Queens Solver"
-gui="n_queens_gui"
 cli="n_queens_problem"
+
+# GUI=slint packages the Slint GUI, which is replacing the egui one (the default).
+case "${GUI:-egui}" in
+    egui) gui="n_queens_gui" features="gui" ;;
+    slint) gui="n_queens_slint" features="gui-slint" ;;
+    *) echo "GUI must be egui or slint, not ${GUI}" >&2; exit 1 ;;
+esac
 
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
 host=$(rustc -vV | sed -n 's/^host: //p')
@@ -21,7 +27,7 @@ zip="$out/$name.zip"
 # A static C runtime lets the executables run without the Visual C++ Redistributable.
 # The explicit target keeps the flag away from build scripts and proc macros.
 export RUSTFLAGS="-C target-feature=+crt-static"
-cargo build --release --locked --features gui --bin "$gui" --target "$host" >&2
+cargo build --release --locked --features "$features" --bin "$gui" --target "$host" >&2
 cargo build --release --locked --bin "$cli" --target "$host" >&2
 
 rm -rf "$dir" "$zip"

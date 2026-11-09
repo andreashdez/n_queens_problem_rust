@@ -66,6 +66,8 @@ jobs:
     - name: Build web GUI
       working-directory: website
       run: npm run build:gui
+    - name: Build the Slint web GUI
+      run: trunk build --release --dist target/web-slint website/gui-slint/index.html
     - name: Check docs
       working-directory: website
       run: npm run check
