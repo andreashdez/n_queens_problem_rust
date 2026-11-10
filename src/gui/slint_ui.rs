@@ -1,4 +1,4 @@
-//! Draws the GUI with Slint. This is replacing [`super::egui_ui`].
+//! Draws the GUI with Slint.
 //!
 //! The `.slint` files in `ui/` lay out the panels, and each panel reads its
 //! properties from a global: `TopBarState`, `ControlsState`, `BoardState`,
@@ -32,7 +32,7 @@ mod board;
 mod charts;
 mod settings;
 
-use settings::{Storage, StoredSettings, Theme};
+use settings::{Layout, Storage, StoredSettings, Theme};
 
 #[allow(
     clippy::all,
@@ -49,6 +49,9 @@ use generated::{
     AppColors, AppWindow, BoardState, BoardText, ChartData, ChartsState, ControlsState,
     HistoryState, LegendEntry, MetricRow, PlotLine, SavedRunItem, Tick, TopBarState,
 };
+
+/// How long resizing must pause before the new sizes are saved.
+const LAYOUT_SAVE_DELAY: Duration = Duration::from_millis(500);
 
 /// The browser has no threads, so its solver runs in slices on this timer.
 const MIN_POLL_INTERVAL: Duration = Duration::from_millis(16);
@@ -126,12 +129,45 @@ fn start(storage: Storage) -> Result<(AppWindow, Rc<RefCell<App>>), slint::Platf
     let ui = AppWindow::new()?;
     let stored = storage.load();
     let theme = stored.theme;
+    restore_layout(&ui, stored.layout);
     let app =
         Rc::new_cyclic(|this| RefCell::new(App::new(stored, storage, ui.as_weak(), this.clone())));
     connect(&ui, &app);
     ui.invoke_use_theme(theme.index());
     refresh(&ui, &mut app.borrow_mut());
     Ok((ui, app))
+}
+
+/// Sizes the window and panels as they were, within the limits the splitters in `ui/app.slint` keep.
+fn restore_layout(ui: &AppWindow, layout: Layout) {
+    let finite = |size: Option<f32>| size.filter(|size| size.is_finite());
+    if let Some(height) = finite(layout.chart_height) {
+        ui.set_chart_height(height.clamp(300.0, 900.0));
+    }
+    if let Some(width) = finite(layout.history_width) {
+        ui.set_history_width(width.clamp(250.0, 600.0));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some([width, height]) = layout.window
+        && width.is_finite()
+        && height.is_finite()
+    {
+        ui.window().set_size(slint::LogicalSize::new(
+            width.max(1000.0),
+            height.max(680.0),
+        ));
+    }
+}
+
+/// The window and panel sizes now.
+fn current_layout(ui: &AppWindow) -> Layout {
+    let window = ui.window();
+    let size = window.size().to_logical(window.scale_factor());
+    Layout {
+        window: Some([size.width, size.height]),
+        chart_height: Some(ui.get_chart_height()),
+        history_width: Some(ui.get_history_width()),
+    }
 }
 
 pub(super) const fn slint_color(color: Rgba) -> slint::Color {
@@ -156,6 +192,9 @@ fn setting(value: i32, min: u32) -> u32 {
 struct App {
     state: AppState,
     theme: Theme,
+    layout: Layout,
+    /// Saves the layout once resizing pauses.
+    layout_timer: Timer,
     dark: bool,
     clock: web_time::Instant,
     storage: Storage,
@@ -196,6 +235,8 @@ impl App {
         Self {
             state: AppState::with_settings(stored.app),
             theme: stored.theme,
+            layout: stored.layout,
+            layout_timer: Timer::default(),
             dark: true,
             clock: web_time::Instant::now(),
             storage,
@@ -281,6 +322,7 @@ impl App {
         let stored = StoredSettings {
             app: self.state.saved_settings(),
             theme: self.theme,
+            layout: self.layout,
         };
         let Ok(json) = serde_json::to_string(&stored) else {
             return;
@@ -375,6 +417,19 @@ fn connect(ui: &AppWindow, app: &Rc<RefCell<App>>) {
                     app.dark = ui.get_dark();
                     show_colors(ui, app.palette());
                     refresh(ui, app);
+                });
+            }
+        });
+    }
+    {
+        let (weak, app) = (ui.as_weak(), Rc::clone(app));
+        ui.on_layout_changed(move || {
+            if let Some(ui) = weak.upgrade() {
+                with_app(&ui, &app, |ui, app| {
+                    app.layout = current_layout(ui);
+                    app.later(LAYOUT_SAVE_DELAY, Some(&app.layout_timer), |_, app| {
+                        app.save();
+                    });
                 });
             }
         });

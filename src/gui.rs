@@ -4,27 +4,23 @@
 //! computes: [`state`] for the app state and its actions, [`worker`] for running
 //! the solver, [`board`] for board geometry, [`charts`] for chart data,
 //! [`history`] for saved runs and CSV export, [`config`] for run settings and
-//! [`palette`] for colors. [`egui_ui`] draws it all with egui, and [`slint_ui`]
-//! with Slint, which is replacing egui.
+//! [`palette`] for colors. [`slint_ui`] draws it all with Slint.
 
 use crate::Solver;
 
 mod board;
 mod charts;
 mod config;
-#[cfg(feature = "gui")]
-pub mod egui_ui;
 mod history;
 mod palette;
-#[cfg(feature = "gui-slint")]
 pub mod slint_ui;
 mod state;
 mod worker;
 
-#[cfg(all(feature = "gui", not(target_arch = "wasm32")))]
-pub use egui_ui::run;
-#[cfg(all(feature = "gui", target_arch = "wasm32"))]
-pub use egui_ui::run_web;
+#[cfg(not(target_arch = "wasm32"))]
+pub use slint_ui::run;
+#[cfg(target_arch = "wasm32")]
+pub use slint_ui::run_web;
 
 /// What the GUI calls one iteration of a solver: a GA epoch or a min-conflicts pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -12,13 +12,7 @@ bundle_id="io.github.andreashdez.n-queens-solver"
 icon="assets/app-icon.icon"
 minimum_macos="11.0"
 targets=(aarch64-apple-darwin x86_64-apple-darwin)
-
-# GUI=slint packages the Slint GUI, which is replacing the egui one (the default).
-case "${GUI:-egui}" in
-    egui) binary="n_queens_gui" features="gui" ;;
-    slint) binary="n_queens_slint" features="gui-slint" ;;
-    *) echo "GUI must be egui or slint, not ${GUI}" >&2; exit 1 ;;
-esac
+binary="n_queens_gui"
 
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
 out="target/macos"
@@ -29,7 +23,7 @@ rustup target add "${targets[@]}" >&2
 binaries=()
 for target in "${targets[@]}"; do
     MACOSX_DEPLOYMENT_TARGET="$minimum_macos" cargo build --release --locked \
-        --features "$features" --bin "$binary" --target "$target" >&2
+        --features gui --bin "$binary" --target "$target" >&2
     binaries+=("target/$target/release/$binary")
 done
 

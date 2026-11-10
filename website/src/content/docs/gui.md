@@ -23,7 +23,7 @@ The GUI runs the solver in the background while you inspect the best board and f
 2. Set the board size and seed. Type any whole number up to 18446744073709551615 as the seed, or click **Random**.
 3. Click **Run solver** in the top bar, or press Ctrl/Cmd+Enter, and watch the board and charts.
 
-While a run is going, the top bar shows a progress bar with the current epoch, the epoch budget, and epochs per second (passes, for min-conflicts); a solution can end the run before the bar fills. **Cancel run** (or Escape) stops after the current epoch. When the run ends, the status next to the button reports the outcome: green when solved, amber when cancelled, out of epochs, or unsolvable.
+While a run is going, the top bar shows a progress bar with the current epoch, the epoch budget, and epochs per second (passes, for min-conflicts); a solution can end the run before the bar fills. **Cancel run** (or Escape, when no queen is selected) stops after the current epoch. When the run ends, the status next to the button reports the outcome: green when solved, amber when cancelled, out of epochs, or unsolvable.
 
 **Advanced settings** contains the genetic algorithm's population/epoch budgets, mutation, parent selection, diversity, and local-search tuning. Hover over a setting for an explanation. Presets preserve the seed and reset all tuning parameters; manual changes are shown as **Custom settings**.
 
@@ -33,19 +33,19 @@ While a run is going, the top bar shows a progress bar with the current epoch, t
 
 The GUI follows your system's light or dark mode. Use **System**, **Dark**, or **Light** at the right of the top bar to choose a theme yourself.
 
-The GUI remembers your settings, the theme, the **Log scale** choice, whether run history is shown, and the window and panel sizes between launches. Run history itself is not saved.
+The GUI remembers your settings, the theme, the **Log scale** choice, whether run history is shown, and the window and panel sizes between launches. Run history itself is not saved. Settings saved by v0.1.0, whose GUI was built with a different toolkit, are not carried over.
 
 ## Inspect the board
 
 Each queen shows how many queens attack it, or **Q** when none do, so conflicts are readable without relying on color. Counts are hidden when the board is zoomed too far out for them to fit.
 
-Click a queen to inspect its conflicts: the selected queen gets a white ring, attacking queens get square outlines, and their shared diagonals are highlighted. Coordinates and hover details identify each queen; a text explanation lists the attackers. Click the same queen, an empty square, or **Clear selection** to clear it; Escape also clears it while the board has keyboard focus. Selection follows the chosen column as the best board changes during a run, and resets on a new run. Coordinate labels are sampled on large boards to stay readable.
+Click a queen to inspect its conflicts: the selected queen gets a white ring, attacking queens get square outlines, and their shared diagonals are highlighted. Coordinates and hover details identify each queen; a text explanation lists the attackers. Click the same queen, an empty square, or **Clear selection** to clear it; Escape also clears it. Selection follows the chosen column as the best board changes during a run, and resets on a new run. Coordinate labels are sampled on large boards to stay readable.
 
 The compact board toolbar shows the queen and attacking-pair counts alongside the zoom controls. Use **+** / **−**, Ctrl/Cmd + scroll, or pinch to zoom into the board, then drag to pan. **Fit** resets the view, and **Help** opens the selection, navigation, and coordinate instructions. Zoom is anchored at the pointer for scroll/pinch gestures and supports up to 1,024× magnification; drawing and hit-testing follow the visible board region.
 
 ## Compare and repeat runs
 
-Toggle the right-hand panel with **Run history** in the top bar, or drag its edge to resize or close it. **Run history** keeps the last ten completed or cancelled runs in memory for this session, including their original settings, seed, outcome, elapsed time, best board, and sampled metrics. Click a run to inspect it, or choose **A** and **B** to overlay their best-conflict curves; picking the second run switches the chart panel to **Compare A/B**. The comparison identifies matching/different seeds and warns when board sizes differ. Runs from different solvers can be compared, with a note that a GA epoch and a min-conflicts pass are different units of work: the axis reads **Epoch / pass**, and the curves do not line up step for step. **Rerun** restores the recorded configuration; **Copy CLI command** copies a reproducible command to run from the project directory.
+Toggle the right-hand panel with **Run history** in the top bar, or drag its left edge to resize it. **Run history** keeps the last ten completed or cancelled runs in memory for this session, including their original settings, seed, outcome, elapsed time, best board, and sampled metrics. Click a run to inspect it, or choose **A** and **B** to overlay their best-conflict curves; picking the second run switches the chart panel to **Compare A/B**. The comparison identifies matching/different seeds and warns when board sizes differ. Runs from different solvers can be compared, with a note that a GA epoch and a min-conflicts pass are different units of work: the axis reads **Epoch / pass**, and the curves do not line up step for step. **Rerun** restores the recorded configuration; **Copy CLI command** copies a reproducible command to run from the project directory.
 
 ## Read the charts
 
@@ -79,14 +79,14 @@ These are different CSV schemas. Check the column headers before combining files
 
 ## Stop a run
 
-Click **Cancel run** or press Escape. Cancellation takes effect after the current epoch or pass; it may take time to finish the current work. Closing the window also requests cancellation. Completed and cancelled runs remain in history while the app is open.
+Click **Cancel run** or press Escape; if a queen is selected, the first Escape clears the selection. Cancellation takes effect after the current epoch or pass; it may take time to finish the current work. Closing the window also requests cancellation. Completed and cancelled runs remain in history while the app is open.
 
 ## In the browser
 
 The [browser version](../demo/) runs entirely on your machine; no runs or settings are sent anywhere. Compared with the desktop app:
 
 - **It is slower.** The page has no threads, so the solver shares one core with the interface and runs for about 10 ms of each frame. Small and medium boards still finish quickly, but **Large board · 5000×5000** takes much longer than on the desktop. Use the desktop GUI or the CLI for big experiments.
-- **Settings are saved in the browser**, in local storage for the page, rather than in the desktop app's settings. Run history is still cleared when you close the tab.
+- **Settings are saved in the browser**, in local storage for the page, rather than in the desktop app's settings. The page sets the window size. Run history is still cleared when you close the tab.
 - **Export metrics downloads** the CSV instead of opening a save dialog.
 - **Copy CLI command** copies the same command as on the desktop, to run from a checkout of the project.
 

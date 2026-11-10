@@ -192,40 +192,52 @@ component Chart inherits VerticalLayout {
                     }
                 }
 
-                TouchArea {
-                    property <length> last-x;
-                    mouse-cursor: self.pressed ? MouseCursor.grabbing : MouseCursor.crosshair;
-                    pointer-event(event) => {
-                        if (event.kind == PointerEventKind.down) {
+                // Pinch on a touchscreen or a macOS trackpad.
+                ScaleRotateGestureHandler {
+                    property <float> last-scale: 1;
+                    started => {
+                        self.last-scale = 1;
+                    }
+                    updated => {
+                        ChartsState.zoom(self.scale / self.last-scale, self.center.x / plot.width);
+                        self.last-scale = self.scale;
+                    }
+
+                    TouchArea {
+                        property <length> last-x;
+                        mouse-cursor: self.pressed ? MouseCursor.grabbing : MouseCursor.crosshair;
+                        pointer-event(event) => {
+                            if (event.kind == PointerEventKind.down) {
+                                self.last-x = self.mouse-x;
+                            }
+                        }
+                        moved => {
+                            ChartsState.pan((self.mouse-x - self.last-x) / plot.width);
                             self.last-x = self.mouse-x;
                         }
-                    }
-                    moved => {
-                        ChartsState.pan((self.mouse-x - self.last-x) / plot.width);
-                        self.last-x = self.mouse-x;
-                    }
-                    changed mouse-x => {
-                        ChartsState.hover(self.mouse-x / plot.width);
-                    }
-                    changed has-hover => {
-                        if (!self.has-hover) {
-                            ChartsState.hover(-1);
+                        changed mouse-x => {
+                            ChartsState.hover(self.mouse-x / plot.width);
                         }
-                    }
-                    double-clicked => {
-                        ChartsState.reset();
-                    }
-                    scroll-event(event) => {
-                        // Leave plain scrolling to the page; zoom with Ctrl/Cmd + scroll.
-                        if (event.modifiers.control || event.modifiers.meta) {
-                            ChartsState.zoom(pow(1.002, event.delta-y / 1px), self.mouse-x / plot.width);
-                            return accept;
+                        changed has-hover => {
+                            if (!self.has-hover) {
+                                ChartsState.hover(-1);
+                            }
                         }
-                        if (event.delta-x != 0) {
-                            ChartsState.pan(event.delta-x / plot.width);
-                            return accept;
+                        double-clicked => {
+                            ChartsState.reset();
                         }
-                        reject
+                        scroll-event(event) => {
+                            // Leave plain scrolling to the page; zoom with Ctrl/Cmd + scroll.
+                            if (event.modifiers.control || event.modifiers.meta) {
+                                ChartsState.zoom(pow(1.002, event.delta-y / 1px), self.mouse-x / plot.width);
+                                return accept;
+                            }
+                            if (event.delta-x != 0) {
+                                ChartsState.pan(event.delta-x / plot.width);
+                                return accept;
+                            }
+                            reject
+                        }
                     }
                 }
             }

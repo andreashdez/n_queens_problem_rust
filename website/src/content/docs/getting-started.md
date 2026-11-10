@@ -59,6 +59,8 @@ Remove `--json` to see progress logs, the text summary, and a terminal board.
 cargo run --release --locked --features gui --bin n_queens_gui
 ```
 
+On Linux, building the GUI also needs the fontconfig development package, such as `libfontconfig1-dev`.
+
 Choose **Quick demo · 8×8**, then **Run solver**. Inspect queens, hover over the charts, and compare completed runs. To try it without building anything, [open the GUI in your browser](../demo/); it is slower than the desktop app on large boards.
 
 [Follow the GUI guide →](../gui/)
@@ -87,6 +89,7 @@ Place N queens on an N×N board without sharing a row, column, or diagonal. This
 | `cargo` is not found | Install Rust using [rustup](https://rustup.rs/), then open a new terminal. |
 | Cargo cannot find `Cargo.toml` | Change into `n_queens_problem_rust`, the cloned repository directory. |
 | The first build is taking time | Cargo compiles dependencies on the first run. Later builds reuse them. |
+| The GUI build fails to find fontconfig on Linux | Install the fontconfig development package, such as `libfontconfig1-dev` or `fontconfig-devel`. |
 | The GUI cannot open a window | Run it in a desktop session with a graphics backend, or use the CLI on a headless machine. |
 | `Stop reason: epoch_limit` | The program ran successfully. Try the [tuning guide](../tuning/) or a different seed. |
 
