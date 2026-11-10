@@ -316,7 +316,7 @@ fn draw_queens(
     };
     // Square outlines mark attackers without relying on color alone.
     let outline_side = attacker_outline_side(cell_points) * scale;
-    // The stroke stays inside the outline, as egui drew it.
+    // The stroke stays inside the outline.
     let inset = 0.75 * scale;
     let inner_side = 2.0f32.mul_add(-inset, outline_side);
     let mut squares = PathBuilder::new();

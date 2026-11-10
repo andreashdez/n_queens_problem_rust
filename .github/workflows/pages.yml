@@ -8,6 +8,8 @@ on:
       - ".github/workflows/pages.yml"
       # The web GUI at /demo/ is built from the crate.
       - "src/**"
+      - "ui/**"
+      - "build.rs"
       - "Cargo.toml"
       - "Cargo.lock"
       - "Trunk.toml"
@@ -48,6 +50,9 @@ jobs:
 
       - name: Install the Rust web target
         run: rustup target add wasm32-unknown-unknown
+
+      - name: Install fontconfig for the GUI
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
 
       - name: Cache Rust dependencies and build output
         uses: Swatinem/rust-cache@v2

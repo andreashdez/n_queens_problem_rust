@@ -4,17 +4,9 @@ on:
   push:
     tags: [ "v*" ]
   workflow_dispatch:
-    inputs:
-      gui:
-        description: GUI toolkit to package; Slint is replacing egui
-        type: choice
-        options: [egui, slint]
-        default: egui
 
 env:
   CARGO_TERM_COLOR: always
-  # Tag pushes have no inputs and package the egui GUI.
-  GUI: ${{ inputs.gui || 'egui' }}
 
 jobs:
   # Creating the release once, before packaging, stops the package jobs racing to create it.
@@ -77,8 +69,8 @@ jobs:
       uses: Swatinem/rust-cache@v2
       with:
         shared-key: release-${{ runner.os }}
-    - name: Install fontconfig for the Slint GUI
-      if: runner.os == 'Linux' && env.GUI == 'slint'
+    - name: Install fontconfig for the GUI
+      if: runner.os == 'Linux'
       run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
     - name: Build the package
       id: package
@@ -90,7 +82,7 @@ jobs:
       if: github.ref_type != 'tag'
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.artifact }}-${{ env.GUI }}
+        name: ${{ matrix.artifact }}
         path: ${{ steps.package.outputs.path }}
     - name: Attach the package to the release
       if: github.ref_type == 'tag'

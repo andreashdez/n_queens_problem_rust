@@ -23,6 +23,7 @@ export component AppWindow inherits Window {
 
     // Room for the chart tabs and two charts at a readable height.
     in-out property <length> chart-height: 400px;
+    in-out property <length> history-width: 320px;
     // From the background rather than `Palette.color-scheme`, which stays unknown
     // while the style follows the system.
     out property <bool> dark: Palette.background.to-hsv().value < 0.5;
@@ -33,6 +34,14 @@ export component AppWindow inherits Window {
     changed dark => {
         root.theme-changed();
     }
+    // The app saves the window and panel sizes for the next launch.
+    callback layout-changed();
+    changed chart-height => {
+        root.layout-changed();
+    }
+    changed history-width => {
+        root.layout-changed();
+    }
 
     // 0: follow the system, 1: dark, 2: light.
     public function use-theme(theme: int) {
@@ -41,6 +50,14 @@ export component AppWindow inherits Window {
     }
 
     keys := FocusScope {
+        // It fills the window. A `changed` handler on the window's own width or
+        // height would make the window open at its minimum width instead.
+        changed width => {
+            root.layout-changed();
+        }
+        changed height => {
+            root.layout-changed();
+        }
         KeyBinding {
             keys: @keys(Control + Return);
             enabled: !TopBarState.running;
@@ -99,8 +116,12 @@ export component AppWindow inherits Window {
                 }
                 if TopBarState.show-history: History {
                     min-width: 250px;
-                    preferred-width: 320px;
+                    preferred-width: root.history-width;
                     horizontal-stretch: 0;
+                    // Leaves the board and charts at least 480px beside the controls.
+                    edge-dragged(dx) => {
+                        root.history-width = clamp(root.history-width - dx, 250px, max(250px, min(600px, root.width - 330px - 480px)));
+                    }
                 }
             }
         }

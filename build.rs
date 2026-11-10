@@ -1,7 +1,7 @@
-//! Compiles the Slint GUI's `.slint` files when the `gui-slint` feature is on.
+//! Compiles the Slint GUI's `.slint` files when the `gui` feature is on.
 
 fn main() {
-    #[cfg(feature = "gui-slint")]
+    #[cfg(feature = "gui")]
     {
         // Debug info lets tests find elements by id with Slint's testing backend.
         let config = slint_build::CompilerConfiguration::new()

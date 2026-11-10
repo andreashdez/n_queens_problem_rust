@@ -1,6 +1,6 @@
 //! Settings kept between launches: in a JSON file natively, in `localStorage` on the web.
 //!
-//! The egui GUI's saved settings are not read: the Slint GUI starts from the defaults.
+//! Settings saved by the earlier egui version of the GUI are not read.
 
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +42,17 @@ pub(super) struct StoredSettings {
     #[serde(flatten)]
     pub app: SavedSettings,
     pub theme: Theme,
+    pub layout: Layout,
+}
+
+/// Window and panel sizes in logical pixels. Missing sizes keep the window's defaults.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(super) struct Layout {
+    /// Width and height. The browser page sizes the window there, so it is not restored.
+    pub window: Option<[f32; 2]>,
+    pub chart_height: Option<f32>,
+    pub history_width: Option<f32>,
 }
 
 /// Where settings are kept.
@@ -156,12 +167,18 @@ mod tests {
                 show_history: true,
             },
             theme: Theme::Light,
+            layout: Layout {
+                window: Some([1200.0, 800.0]),
+                chart_height: Some(350.0),
+                history_width: None,
+            },
         };
         let json = serde_json::to_string(&stored).unwrap();
         let restored: StoredSettings = serde_json::from_str(&json).unwrap();
         assert!(restored.app.config == stored.app.config);
         assert!(!restored.app.log_conflicts);
         assert_eq!(restored.theme, Theme::Light);
+        assert_eq!(restored.layout, stored.layout);
 
         let partial: StoredSettings = serde_json::from_str(r#"{"theme": "dark"}"#).unwrap();
         assert_eq!(partial.theme, Theme::Dark);

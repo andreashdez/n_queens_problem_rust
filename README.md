@@ -33,9 +33,9 @@ cargo run --release --locked --features gui --bin n_queens_gui
 
 Keep **Recommended defaults · 18×18** and seed **42**, then click **Run solver** to try the example pictured above. Click queens to inspect conflicts, zoom and pan the board, compare runs, and export metrics. Run history lasts for the current session.
 
-To try the GUI without building it, [open it in your browser](https://andreashdez.github.io/n_queens_problem_rust/demo/). It is the same app compiled to WebAssembly, and slower than the desktop app on large boards.
+On Linux, building the GUI also needs the fontconfig development package, such as `libfontconfig1-dev`.
 
-The GUI is being rewritten with [Slint](https://slint.dev). To try the new version, run `cargo run --release --locked --features gui-slint --bin n_queens_slint`, or `trunk serve website/gui-slint/index.html` for the browser. On Linux it needs the fontconfig development package, such as `libfontconfig1-dev`.
+To try the GUI without building it, [open it in your browser](https://andreashdez.github.io/n_queens_problem_rust/demo/). It is the same app compiled to WebAssembly, and slower than the desktop app on large boards.
 
 ### Command line
 
@@ -77,4 +77,4 @@ The documentation source is in [`website/src/content/docs/`](website/src/content
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). The GUI is built with [Slint](https://slint.dev), used under its [Royalty-free License](https://github.com/slint-ui/slint/blob/master/LICENSES/LicenseRef-Slint-Royalty-free-2.0.md); its **About** dialog carries the attribution that license asks for.

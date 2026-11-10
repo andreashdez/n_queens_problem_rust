@@ -31,8 +31,6 @@ cargo clippy --lib --bins --features gui --target wasm32-unknown-unknown -- \
   -D clippy::pedantic -D clippy::nursery -D warnings
 ```
 
-The Slint GUI that is replacing it has its own page: `trunk serve website/gui-slint/index.html`. Lint it with `--features gui-slint` in place of `--features gui`. It is not published on the site yet.
-
 ## Work on the docs
 
 The site uses Astro and Starlight. With Node.js 24 LTS (Astro needs 22.23.4 or newer), npm, Python 3.10+, and Rust installed, run from `website/`:
@@ -60,11 +58,11 @@ GitHub Actions builds the site with the repository's Pages origin and base path.
 
 ## Update the GUI screenshot
 
-The README, homepage, and GUI guide share `website/src/assets/gui-overview.png`. The current image was captured on macOS from revision `674338b` using **Recommended defaults · 18×18**, seed **42**, which solved at epoch **39**.
+The README, homepage, and GUI guide share `website/src/assets/gui-overview.png`. The current image was captured on macOS in dark mode, from the first Slint version of the GUI, in a 1240×900 window using **Recommended defaults · 18×18**, seed **42**, which solved at epoch **39**. It was scaled to 1600 pixels wide.
 
 1. Build and launch the current GUI with `cargo run --release --locked --features gui --bin n_queens_gui`.
 2. Select the recommended preset, set seed 42, and click **Run solver**.
-3. Resize the window and, if needed, reduce the interface scale with Ctrl/⌘ + **−** so the board and both charts are fully visible. Capture only the application window.
+3. Resize the window so the board, its toolbar, and both charts are fully visible. Capture only the application window, for example with `screencapture -l <window id>`.
 4. Replace the shared image and update the captions and this capture record if the preset, seed, or outcome changes. Keep the filename extension consistent with the image format.
 5. Run the documentation build and link checks above.
 
@@ -72,7 +70,7 @@ The screenshot records a real run. Its elapsed time is illustrative, not a bench
 
 ## Update the app icon
 
-`assets/app-icon.svg` is the source for the logo, drawn with the colors and queen of the board on the docs homepage. The desktop GUI embeds `assets/app-icon.png` as its window and Dock icon when run with Cargo. The macOS app bundle uses `assets/app-icon.icon` instead, made with Icon Composer from the same art. The web GUI and the docs site use `website/public/favicon.svg`, a simpler queen tile that stays legible at small sizes. After changing the SVG, update the Icon Composer icon to match and render the PNG again:
+`assets/app-icon.svg` is the source for the logo, drawn with the colors and queen of the board on the docs homepage. The desktop GUI embeds `assets/app-icon.png` as its window icon; macOS has no window icons, so there only the app bundle shows the logo. The bundle uses `assets/app-icon.icon`, made with Icon Composer from the same art. The web GUI and the docs site use `website/public/favicon.svg`, a simpler queen tile that stays legible at small sizes. After changing the SVG, update the Icon Composer icon to match and render the PNG again:
 
 ```bash
 magick -background none assets/app-icon.svg -resize 512x512 -depth 8 -strip assets/app-icon.png
@@ -90,7 +88,7 @@ Each platform has a packaging script:
 
 Each script writes into `target/macos/`, `target/linux/`, or `target/windows/` and prints the path of the archive.
 
-The scripts package the egui GUI. Set `GUI=slint` to package the Slint GUI that is replacing it, for example `GUI=slint scripts/bundle-macos.sh`. On Linux, the Slint GUI also needs the fontconfig development package, such as `libfontconfig1-dev`, to build. Its window uses `io.github.andreashdez.n-queens-solver` as its Wayland app ID and X11 window class, so the desktop matches it to the menu entry and icon.
+On Linux, building the GUI also needs the fontconfig development package, such as `libfontconfig1-dev`. The GUI's window uses `io.github.andreashdez.n-queens-solver` as its Wayland app ID and X11 window class, so the desktop matches it to the menu entry and icon.
 
 To publish a release, set `version` in `Cargo.toml`, then push a matching tag:
 
@@ -99,7 +97,7 @@ git tag -a v0.1.0 -m "v0.1.0"
 git push origin v0.1.0
 ```
 
-The Release workflow checks that the tag matches the crate version and creates the GitHub release for that tag if it does not exist yet. It then packages each platform on its own runner and attaches the archives. The Linux job runs on the oldest available Ubuntu runner, because the binaries need its glibc or newer. If one platform fails, the others still finish, and you can rerun only the failed job. Running the workflow manually builds the same archives as workflow artifacts without publishing anything. A manual run can package the Slint GUI by choosing `slint` for its **gui** input.
+The Release workflow checks that the tag matches the crate version and creates the GitHub release for that tag if it does not exist yet. It then packages each platform on its own runner and attaches the archives. The Linux job runs on the oldest available Ubuntu runner, because the binaries need its glibc or newer. If one platform fails, the others still finish, and you can rerun only the failed job. Running the workflow manually builds the same archives as workflow artifacts without publishing anything.
 
 None of the apps are signed with a paid certificate, so each system warns on the first launch of a downloaded copy:
 

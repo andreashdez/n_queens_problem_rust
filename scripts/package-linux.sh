@@ -9,16 +9,8 @@ cd "$(dirname "$0")/.."
 
 app_name="N-Queens Solver"
 app_id="io.github.andreashdez.n-queens-solver"
+gui="n_queens_gui"
 cli="n_queens_problem"
-
-# GUI=slint packages the Slint GUI, which is replacing the egui one (the default).
-case "${GUI:-egui}" in
-    # Without an app ID, winit names the X11 window class after the executable.
-    egui) gui="n_queens_gui" features="gui" wm_class="n_queens_gui" needs="OpenGL" ;;
-    # The Slint GUI sets the app ID as its X11 window class and Wayland app ID.
-    slint) gui="n_queens_slint" features="gui-slint" wm_class="$app_id" needs="OpenGL and fontconfig" ;;
-    *) echo "GUI must be egui or slint, not ${GUI}" >&2; exit 1 ;;
-esac
 
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
 host=$(rustc -vV | sed -n 's/^host: //p')
@@ -27,7 +19,7 @@ name="N-Queens-Solver-$version-linux-${host%%-*}"
 dir="$out/$name"
 tarball="$out/$name.tar.gz"
 
-cargo build --release --locked --features "$features" --bin "$gui" >&2
+cargo build --release --locked --features gui --bin "$gui" >&2
 cargo build --release --locked --bin "$cli" >&2
 
 rm -rf "$dir" "$tarball"
@@ -45,7 +37,8 @@ Exec=$gui
 Icon=$app_id
 Terminal=false
 Categories=Education;Science;Math;
-StartupWMClass=$wm_class
+# The GUI sets the app ID as its X11 window class and Wayland app ID.
+StartupWMClass=$app_id
 EOF
 
 cat > "$dir/README.txt" <<EOF
@@ -54,7 +47,7 @@ $app_name $version for Linux
   ./$gui         opens the desktop GUI
   ./$cli     runs the command line solver (--help lists the options)
 
-The GUI needs a desktop session with $needs. Exporting metrics uses the
+The GUI needs a desktop session with OpenGL and fontconfig. Exporting metrics uses the
 desktop's file dialog through xdg-desktop-portal, or zenity if it is missing.
 
 To add the GUI to your application menu, install it into your home folder:

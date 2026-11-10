@@ -133,6 +133,9 @@ component SavedRunCard inherits VerticalLayout {
 }
 
 export component History inherits Rectangle {
+    // How far the left edge was dragged, positive to the right.
+    callback edge-dragged(length);
+
     Rectangle {
         x: 0;
         width: 1px;
@@ -165,6 +168,19 @@ export component History inherits Rectangle {
             }
             for run in HistoryState.runs: SavedRunCard {
                 run: run;
+            }
+        }
+    }
+
+    // Drag the left edge to resize the panel.
+    Rectangle {
+        x: 0;
+        width: 5px;
+        background: edge.has-hover || edge.pressed ? Palette.border : transparent;
+        edge := TouchArea {
+            mouse-cursor: col-resize;
+            moved => {
+                root.edge-dragged(self.mouse-x - self.pressed-x);
             }
         }
     }

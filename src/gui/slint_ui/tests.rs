@@ -154,6 +154,30 @@ fn drag(ui: &AppWindow, from: LogicalPosition, to: LogicalPosition) {
     settle();
 }
 
+/// A two-finger pinch that scales by `factor`, as a trackpad reports it.
+fn pinch(ui: &AppWindow, position: LogicalPosition, factor: f32) {
+    use i_slint_core::{
+        input::{BackendMouseEvent, TouchPhase},
+        lengths::LogicalPoint,
+    };
+
+    let window = ui.window();
+    window.dispatch_event(WindowEvent::PointerMoved { position });
+    let position = LogicalPoint::new(position.x, position.y);
+    for (delta, phase) in [
+        (0.0, TouchPhase::Started),
+        (factor - 1.0, TouchPhase::Moved),
+        (0.0, TouchPhase::Ended),
+    ] {
+        window.dispatch_event(WindowEvent::internal(BackendMouseEvent::PinchGesture {
+            position,
+            delta,
+            phase,
+        }));
+    }
+    settle();
+}
+
 /// Where queen `column` sits on screen.
 fn queen_position(ui: &AppWindow, app: &Rc<RefCell<App>>, column: usize) -> LogicalPosition {
     let app = app.borrow();
@@ -570,6 +594,8 @@ fn the_board_follows_pointer_gestures() {
     click_on(&ui, "Fit");
     assert_eq!(board.get_zoom_label(), "100%");
     assert_eq!(element(&ui, "−").accessible_enabled(), Some(false));
+    pinch(&ui, middle, 2.0);
+    assert_eq!(board.get_zoom_label(), "200%", "pinching zooms");
 }
 
 #[test]
@@ -639,6 +665,8 @@ fn charts_follow_pointer_gestures_and_the_legend() {
         !app.borrow().charts.zoomed(),
         "a double click resets the zoom"
     );
+    pinch(&ui, middle, 2.0);
+    assert!(app.borrow().charts.zoomed(), "pinching zooms");
 
     let lines = || charts.get_charts().row_data(0).unwrap().lines.row_count();
     let shown = lines();
@@ -655,7 +683,7 @@ fn charts_follow_pointer_gestures_and_the_legend() {
 }
 
 #[test]
-fn history_copies_commands_and_hides() {
+fn history_copies_commands_resizes_and_hides() {
     let (ui, app) = setup();
     ui.global::<TopBarState>().invoke_run();
     finish_run(&app);
@@ -665,6 +693,24 @@ fn history_copies_commands_and_hides() {
     assert_eq!(
         ui.global::<TopBarState>().get_notice(),
         "Copied command for run #1"
+    );
+
+    // Dragging the panel's left edge widens it, up to a limit.
+    let edge = || {
+        center(
+            &testing::ElementHandle::find_by_element_id(&ui, "History::edge")
+                .next()
+                .expect("the history panel's edge has an id"),
+        )
+    };
+    let start = edge();
+    drag(&ui, start, LogicalPosition::new(start.x - 80.0, start.y));
+    assert!((ui.get_history_width() - 400.0).abs() < 0.5);
+    let start = edge();
+    drag(&ui, start, LogicalPosition::new(start.x - 2000.0, start.y));
+    assert!(
+        (ui.get_history_width() - 590.0).abs() < 0.5,
+        "1400px window"
     );
 
     click_on(&ui, "Run history (1)");
@@ -727,15 +773,29 @@ fn settings_survive_a_restart() {
         ui.global::<TopBarState>().invoke_choose_theme(2);
         settle();
         assert!(!app.borrow().state.log_conflicts);
+        ui.window().set_size(slint::LogicalSize::new(1300.0, 850.0));
+        ui.set_chart_height(350.0);
+        ui.set_history_width(300.0);
+        settle();
+        // Sizes are saved once resizing pauses.
+        testing::mock_elapsed_time(LAYOUT_SAVE_DELAY);
     }
     let saved = std::fs::read_to_string(&path).expect("settings were written");
     assert!(saved.contains(r#""theme":"light""#), "{saved}");
+    {
+        let (ui, _app) = start(Storage::File(path.clone())).unwrap();
+        let window = ui.window();
+        let size = window.size().to_logical(window.scale_factor());
+        assert_eq!((size.width, size.height), (1300.0, 850.0), "{saved}");
+    }
     {
         let (ui, app) = setup_with(Storage::File(path.clone()), 1400.0, 900.0);
         assert!(GuiPreset::matching(&app.borrow().state.config) == Some(GuiPreset::Classic));
         assert!(!ui.global::<ChartsState>().get_log_scale());
         assert_eq!(ui.global::<TopBarState>().get_theme(), 2);
         assert!(!ui.get_dark());
+        assert!((ui.get_chart_height() - 350.0).abs() < f32::EPSILON);
+        assert!((ui.get_history_width() - 300.0).abs() < f32::EPSILON);
     }
     // A damaged file falls back to the defaults.
     std::fs::write(&path, "{not json").unwrap();
